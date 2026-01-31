@@ -49,8 +49,8 @@ const processBarcodeSearch = async (req, res) => {
     const cleanBarcode = String(barcode).trim();
     console.log(`🔹 Lookup OpenFoodFacts for: ${cleanBarcode}`);
 
-    // 3. Request data from OpenFoodFacts
-    const offUrl = `https://world.openfoodfacts.org/api/v2/product/${cleanBarcode}.json`;
+    // 3. Request data from Open Food Facts (use .net API – .org can timeout/fail for product lookup)
+    const offUrl = `https://world.openfoodfacts.net/api/v2/product/${cleanBarcode}`;
     
     const response = await axios.get(offUrl, { 
       headers: OFF_HEADERS,
