@@ -1,11 +1,10 @@
 import React from "react";
 import { motion } from "framer-motion";
-import { Camera, Barcode, PenLine } from "lucide-react";
+import { Camera, Barcode } from "lucide-react";
 
 const modes = [
-  { id: "camera", icon: Camera, label: "Photo" },
+  { id: "camera", icon: Camera, label: "Image" },
   { id: "barcode", icon: Barcode, label: "Barcode" },
-  { id: "manual", icon: PenLine, label: "Manual" },
 ];
 
 const ScanModeToggle = ({ mode, onModeChange }) => {

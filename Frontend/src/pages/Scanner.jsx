@@ -225,7 +225,6 @@ const Scanner = () => {
       stopCamera();
       setIsScanning(false);
       stopBarcodeScan();
-      if (mode === "manual") navigate("/manual-entry");
     }
   }, [mode]);
 
@@ -511,30 +510,31 @@ const Scanner = () => {
       )}
 
       {/* 🔝 HEADER */}
-      <div className="absolute top-4 left-4 right-4 z-20 flex justify-between items-center">
-        <button
-          onClick={() => navigate('/home')}
-          className="rounded-full bg-black/40 backdrop-blur-md p-3 text-white hover:bg-black/60 transition-colors"
-          disabled={isAnalyzing}
-        >
-          <X size={24} />
-        </button>
-        <ScanModeToggle mode={mode} onModeChange={setMode} />
-      </div>
-
-      {/* 📤 UPLOAD BUTTON */}
-      {(mode === "camera" || mode === "barcode") && !capturedImage && !detectedBarcode && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+      <div className="absolute top-4 left-4 right-4 z-20 flex flex-col gap-4">
+        <div className="flex justify-between items-center">
           <button
-            onClick={handleUploadClick}
-            className="rounded-full bg-black/40 backdrop-blur-md px-5 py-2.5 text-white hover:bg-black/60 transition-all flex items-center gap-2 border border-white/10"
+            onClick={() => navigate('/home')}
+            className="rounded-full bg-black/40 backdrop-blur-md p-3 text-white hover:bg-black/60 transition-colors"
             disabled={isAnalyzing}
           >
-            <Upload size={18} />
-            <span className="text-sm font-medium">Upload</span>
+            <X size={24} />
           </button>
+          <ScanModeToggle mode={mode} onModeChange={setMode} />
         </div>
-      )}
+        {/* 📤 UPLOAD BUTTON - below mode options, no overlap */}
+        {(mode === "camera" || mode === "barcode") && !capturedImage && !detectedBarcode && (
+          <div className="flex justify-center">
+            <button
+              onClick={handleUploadClick}
+              className="rounded-full bg-black/40 backdrop-blur-md px-6 py-3 text-white hover:bg-black/60 transition-all flex items-center gap-2 border border-white/10"
+              disabled={isAnalyzing}
+            >
+              <Upload size={18} />
+              <span className="text-sm font-medium">Upload</span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* 📸 CAPTURE BUTTON */}
       {mode === "camera" && !capturedImage && (
