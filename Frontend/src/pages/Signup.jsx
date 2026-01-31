@@ -88,7 +88,7 @@ const Signup = () => {
     setIsLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:5000/api/users/signup', formData);
+      const res = await axios.post('https://label-lens-backend.onrender.com/api/users/signup', formData);
       
       if (res.status === 201 || res.data.success) {
         setVerificationSent(true);

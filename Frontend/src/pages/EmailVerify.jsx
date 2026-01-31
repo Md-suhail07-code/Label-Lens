@@ -24,7 +24,7 @@ const EmailVerify = () => {
         const verifyEmail = async () => {
             try {
                 // Adjust this URL to your actual backend endpoint
-                const res = await axios.post(`http://localhost:5000/api/users/verify-email`, {}, {
+                const res = await axios.post(`https://label-lens-backend.onrender.com/api/users/verify-email`, {}, {
                     headers: {
                         Authorization: `Bearer ${token}`
                     }

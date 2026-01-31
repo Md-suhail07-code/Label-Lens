@@ -24,7 +24,7 @@ const Settings = () => {
   const [newName, setNewName] = useState(profile.user?.username || '');
   const [isUpdating, setIsUpdating] = useState(false);
 
-  const API_BASE = "http://localhost:5000/api/users";
+  const API_BASE = "https://label-lens-backend.onrender.com/api/users";
   const token = localStorage.getItem("accessToken");
 
   const handleUpdateUsername = async () => {

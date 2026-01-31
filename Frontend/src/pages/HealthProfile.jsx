@@ -32,7 +32,7 @@ const HealthProfile = () => {
 
     try {
       const res = await axios.put(
-        `http://localhost:5000/api/users/update-user/`,
+        `https://label-lens-backend.onrender.com/api/users/update-user/`,
         {
           healthCondition: profile.user.healthCondition || [],
           allergies: profile.user.allergies || []

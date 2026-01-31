@@ -22,7 +22,7 @@ const Login = () => {
     setIsLoading(true);
     
     try {
-      const res = await axios.post('http://localhost:5000/api/users/login', { email, password }, {
+      const res = await axios.post('https://label-lens-backend.onrender.com/api/users/login', { email, password }, {
         headers: {
           'Content-Type': 'application/json',
         },

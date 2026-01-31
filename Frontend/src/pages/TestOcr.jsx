@@ -46,7 +46,7 @@ const TestOCR = () => {
     try {
       // Replace with your actual backend URL
       // Note: Ensure your backend CORS is configured to allow requests from localhost:5173 (Vite default)
-      const response = await axios.post('http://localhost:5000/api/ocr/extract-text', formData, {
+      const response = await axios.post('https://label-lens-backend.onrender.com/api/ocr/extract-text', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },

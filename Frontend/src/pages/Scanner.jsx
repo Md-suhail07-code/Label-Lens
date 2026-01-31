@@ -115,7 +115,7 @@ const Scanner = () => {
       formData.append('image', blob, 'scan.png');
 
       // 2. Call Backend API
-      const backendRes = await axios.post('http://localhost:5000/api/ocr/process-scan', formData, {
+      const backendRes = await axios.post('https://label-lens-backend.onrender.com/api/ocr/process-scan', formData, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
           'Content-Type': 'multipart/form-data'
