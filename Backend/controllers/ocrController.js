@@ -1,291 +1,151 @@
-import vision from '@google-cloud/vision';
-import { v2 as cloudinary } from 'cloudinary';
-import streamifier from 'streamifier';
 import axios from 'axios';
-import { ScanHistory } from '../models/historyModel.js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import dotenv from 'dotenv';
-dotenv.config();
-
-// ==========================================
-// CONFIGURATION & CLIENTS
-// ==========================================
-
-const visionClient = new vision.ImageAnnotatorClient();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const OFF_HEADERS = {
   "User-Agent": "LabelLens/1.0 (Educational Project)",
   "Accept": "application/json"
 };
 
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// ==========================================
-// HELPER FUNCTIONS
-// ==========================================
-
-// --- Helper: Clean JSON Parsing ---
-function parseGeminiJson(text) {
+/** Try OFF product API; returns product object or null */
+async function fetchOffProduct(code, base = 'org') {
+  const host = base === 'net' ? 'world.openfoodfacts.net' : 'world.openfoodfacts.org';
+  const url = `https://${host}/api/v0/product/${code}.json`;
   try {
-    let clean = text.replace(/```json|```/g, "").trim();
-    const firstBrace = clean.indexOf('{');
-    const lastBrace = clean.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      clean = clean.substring(firstBrace, lastBrace + 1);
-    }
-    return JSON.parse(clean);
+    const res = await axios.get(url, {
+      headers: OFF_HEADERS,
+      timeout: 8000,
+      validateStatus: () => true
+    });
+    const data = res.data;
+    if (res.status === 200 && data && typeof data === 'object' && data.status === 1 && data.product) return data.product;
   } catch (e) {
-    console.error("❌ JSON Parse Error:", e.message);
-    return null;
+    console.log(`   OFF ${base} failed:`, e.message);
   }
+  return null;
 }
 
-// --- Helper: Fetch Image for Alternatives ---
-// specific search to find a product image by name
-async function fetchProductImage(productName) {
+/** Try OFF v2 product API (.net); returns product object or null */
+async function fetchOffProductV2(code) {
   try {
-    // We search OFF for the product name to get an image
-    const url = `https://world.openfoodfacts.org/cgi/search.pl`;
+    const url = `https://world.openfoodfacts.net/api/v2/product/${code}`;
     const res = await axios.get(url, {
+      headers: OFF_HEADERS,
+      timeout: 8000,
+      validateStatus: () => true
+    });
+    const data = res.data;
+    if (res.status === 200 && data && typeof data === 'object' && data.status === 1 && data.product) return data.product;
+  } catch (e) {
+    console.log('   OFF v2 .net failed:', e.message);
+  }
+  return null;
+}
+
+/** Fallback: search by barcode (search_terms); returns product object or null */
+async function searchOffByCode(code) {
+  try {
+    const res = await axios.get('https://world.openfoodfacts.org/cgi/search.pl', {
       params: {
-        search_terms: productName,
+        search_terms: code,
         search_simple: 1,
         action: 'process',
         json: 1,
-        page_size: 1, // We only need the top result
-        fields: 'image_front_small_url,image_front_url,product_name,brands'
+        fields: 'code,product_name,product_name_en,brands,ingredients_text,ingredients_text_en,image_url,image_front_url,nutriscore_grade'
       },
       headers: OFF_HEADERS,
-      timeout: 3000
+      timeout: 8000,
+      validateStatus: () => true
     });
-    
     const products = res.data?.products || [];
-    if (products.length > 0) {
-      return products[0].image_front_small_url || products[0].image_front_url || null;
-    }
-  } catch (error) {
-    console.log(`   [OFF Image Fetch Failed for ${productName}]`);
+    const match = products.find(p => String(p.code || '') === String(code));
+    return match || products[0] || null;
+  } catch (e) {
+    console.log('   Search API failed:', e.message);
   }
   return null;
 }
 
-// --- Helper: Full Gemini Analysis (Risk + Alternatives) ---
-async function analyzeWithGemini(productName, ingredientsText, user) {
-  try {
-    const healthCondition = user?.healthCondition || "none";
-    const allergies = user?.allergies || [];
+/** Build API response shape from OFF product object */
+function buildResultData(product) {
+  const nutriScore = (product.nutriscore_grade || 'unknown').toLowerCase();
+  let derivedVerdict = 'moderate';
+  let derivedScore = 50;
+  if (['a', 'b'].includes(nutriScore)) { derivedVerdict = 'safe'; derivedScore = 15; }
+  else if (['c', 'd'].includes(nutriScore)) { derivedVerdict = 'moderate'; derivedScore = 55; }
+  else if (nutriScore === 'e') { derivedVerdict = 'unsafe'; derivedScore = 85; }
 
-    const prompt = `
-      Analyze Product: "${productName}"
-      Ingredients: "${ingredientsText}"
-      User Context: Health: ${healthCondition}, Allergies: ${allergies.join(", ")}
-
-      TASK:
-      1. Analyze the ingredients for health risks (Indian context).
-      2. Assign a Risk Score (0-100, where 100 is most dangerous).
-      3. Suggest exactly 3 "Cleaner/Healthier" alternative products available in the INDIAN MARKET.
-         - Alternatives MUST be real, specific brand names (e.g. "Tata Soulfull Ragi Bites", "Yoga Bar Muesli").
-
-      Return VALID JSON ONLY:
-      {
-        "riskScore": Number,
-        "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
-        "analysisSummary": "Short, punchy summary of why it is safe or unsafe.",
-        "flaggedIngredients": [ { "name": "Ingredient Name", "reason": "Short reason why" } ],
-        "alternatives": ["Brand Name 1", "Brand Name 2", "Brand Name 3"]
-      }
-    `;
-
-    const aiResult = await model.generateContent(prompt);
-    const parsed = parseGeminiJson(aiResult.response.text());
-    
-    // Default fallback if AI fails
-    if (!parsed) return {
-      riskScore: 50,
-      verdict: "Unknown",
-      analysisSummary: "Could not analyze ingredients.",
-      flaggedIngredients: [],
-      alternatives: []
-    };
-
-    return parsed;
-
-  } catch (error) {
-    console.error("⚠️ Gemini Analysis Failed:", error.message);
-    return null;
-  }
+  return {
+    productName: product.product_name || product.product_name_en || "Unknown Product",
+    brand: product.brands || "Unknown Brand",
+    image: product.image_front_url || product.image_url || null,
+    ingredients: product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.",
+    riskScore: derivedScore,
+    verdict: derivedVerdict,
+    analysisSummary: `NutriScore: ${nutriScore.toUpperCase()}. (MVP: Detailed analysis is a placeholder).`,
+    flaggedIngredients: derivedVerdict === 'unsafe' ? [{ name: "High Risk Additives", reason: "Low NutriScore (E)." }] : [],
+    alternatives: []
+  };
 }
 
-// --- OpenFoodFacts Fetchers ---
-async function fetchOffProduct(code) {
-  // Try .org first, then .net as fallback
-  const domains = ['world.openfoodfacts.org', 'world.openfoodfacts.net'];
-  
-  for (const domain of domains) {
-    try {
-      const url = `https://${domain}/api/v2/product/${code}`;
-      const res = await axios.get(url, { headers: OFF_HEADERS, timeout: 5000 });
-      if (res.data?.product) return res.data.product;
-    } catch (e) { continue; }
-  }
-  return null;
-}
-
-// ==========================================
-// CONTROLLERS
-// ==========================================
-
-// 1. PROCESS BARCODE SEARCH
+// --- CONTROLLER: Process Barcode Search ---
 const processBarcodeSearch = async (req, res) => {
   try {
     const rawBarcode = req.body?.barcode;
-    if (!rawBarcode) return res.status(400).json({ success: false, message: "No barcode provided." });
-    
-    console.log(`🔹 Processing Barcode: ${rawBarcode}`);
-
-    // 1. GET PRODUCT FROM OFF
-    const product = await fetchOffProduct(rawBarcode);
-
-    if (!product) {
-      return res.json({ success: false, message: "Product not found." });
+    if (rawBarcode == null || String(rawBarcode).trim() === '') {
+      return res.status(400).json({ success: false, message: "No barcode provided." });
     }
 
-    console.log('✅ Found Product in OFF:', product.product_name);
+    const barcode = String(rawBarcode).trim();
+    console.log(`🔹 Processing barcode: ${barcode}`);
 
-    // 2. PREPARE DATA FOR GEMINI
-    const productName = product.product_name || product.product_name_en || "Unknown Product";
-    const ingredients = product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.";
-    const productImage = product.image_front_url || product.image_url || null;
-    const brand = product.brands || "Unknown Brand";
-
-    // 3. GET GEMINI ANALYSIS & ALTERNATIVES
-    console.log('✨ Analyzing with Gemini...');
-    const user = req.user || {};
-    const analysis = await analyzeWithGemini(productName, ingredients, user);
-
-    if (!analysis) {
-       // Fallback if Gemini fails entirely
-       return res.json({ 
-         success: true, 
-         data: { 
-           productName, brand, image: productImage, ingredients, 
-           riskScore: 50, verdict: "Moderate", alternatives: [] 
-         } 
-       });
+    // 1) Try .org v0 product API
+    let product = await fetchOffProduct(barcode, 'org');
+    if (product) {
+      console.log('✅ Found via OFF .org v0');
+      const resultData = buildResultData(product);
+      return res.json({ success: true, data: resultData });
     }
 
-    // 4. ENRICH ALTERNATIVES WITH IMAGES (The key step you asked for)
-    let enrichedAlternatives = [];
-    if (analysis.alternatives && Array.isArray(analysis.alternatives)) {
-      console.log(`🔎 Fetching images for ${analysis.alternatives.length} alternatives...`);
-      
-      enrichedAlternatives = await Promise.all(
-        analysis.alternatives.map(async (altName) => {
-          const imgUrl = await fetchProductImage(altName);
-          return {
-            name: altName,
-            image: imgUrl, // This image comes from a fresh OFF query
-            brand: "Suggested Alternative"
-          };
-        })
-      );
+    // 2) Try .net v0 (often works when .org fails from server)
+    product = await fetchOffProduct(barcode, 'net');
+    if (product) {
+      console.log('✅ Found via OFF .net v0');
+      const resultData = buildResultData(product);
+      return res.json({ success: true, data: resultData });
     }
 
-    // 5. CONSTRUCT FINAL RESPONSE
-    const resultData = {
-      productName,
-      brand,
-      image: productImage,
-      ingredients,
-      riskScore: analysis.riskScore,
-      verdict: analysis.verdict,
-      analysisSummary: analysis.analysisSummary,
-      flaggedIngredients: analysis.flaggedIngredients || [],
-      alternatives: enrichedAlternatives // Fully populated with images
-    };
+    // 3) Try .net v2 product API
+    product = await fetchOffProductV2(barcode);
+    if (product) {
+      console.log('✅ Found via OFF .net v2');
+      const resultData = buildResultData(product);
+      return res.json({ success: true, data: resultData });
+    }
 
-    // Optional: Save to history here if you want barcode scans in history too
+    // 4) Fallback: search by barcode (search_terms)
+    product = await searchOffByCode(barcode);
+    if (product) {
+      console.log('✅ Found via OFF search API');
+      const resultData = buildResultData(product);
+      return res.json({ success: true, data: resultData });
+    }
 
-    return res.json({ success: true, data: resultData });
-
+    console.log('❌ Product not found in OFF (tried .org, .net, search).');
+    return res.json({
+      success: false,
+      message: "Product not found. Please try scanning again."
+    });
   } catch (error) {
     console.error("🔥 Server Error:", error.message);
-    return res.status(500).json({ success: false, message: "Server error." });
+    return res.status(500).json({
+      success: false,
+      message: "Server error connecting to product database."
+    });
   }
 };
 
-// 2. PROCESS IMAGE SCAN (OCR)
+// Placeholder for Image Scan (Keep to prevent router errors if you have this route defined)
 const processImageScan = async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "No image provided" });
-
-    // 1. Upload & OCR
-    const uploadFromBuffer = (buffer) => {
-      return new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          { folder: "label-lens-scans" },
-          (error, result) => (result ? resolve(result) : reject(error))
-        );
-        streamifier.createReadStream(buffer).pipe(uploadStream);
-      });
-    };
-
-    const uploadResult = await uploadFromBuffer(req.file.buffer);
-    const [ocrResult] = await visionClient.textDetection({ image: { content: req.file.buffer } });
-    const extractedText = ocrResult.textAnnotations?.[0]?.description || "";
-
-    if (!extractedText) return res.json({ success: false, message: "No text found." });
-
-    // 2. Gemini Analysis
-    const user = req.user || {};
-    const analysis = await analyzeWithGemini("Scanned Label", extractedText, user);
-    
-    // 3. Enrich Alternatives
-    let enrichedAlternatives = [];
-    if (analysis && analysis.alternatives) {
-      enrichedAlternatives = await Promise.all(
-        analysis.alternatives.map(async (altName) => {
-          const imgUrl = await fetchProductImage(altName);
-          return { name: altName, image: imgUrl, brand: "Suggested" };
-        })
-      );
-    }
-
-    const finalData = {
-       imageUrl: uploadResult.secure_url,
-       extractedText,
-       productName: "Scanned Label",
-       ...analysis,
-       alternatives: enrichedAlternatives
-    };
-
-    // 4. Save History
-    if (req.user) {
-      await new ScanHistory({
-        user: req.user._id,
-        scannedImageUrl: finalData.imageUrl,
-        scanType: "image_ocr",
-        productName: finalData.productName,
-        riskScore: finalData.riskScore,
-        verdict: finalData.verdict,
-        analysisSummary: finalData.analysisSummary,
-        flaggedIngredients: finalData.flaggedIngredients,
-        alternatives: finalData.alternatives 
-      }).save();
-    }
-
-    res.json({ success: true, data: finalData });
-
-  } catch (error) {
-    console.error("LabelLens Processing Error:", error);
-    res.status(500).json({ success: false, error: "Failed to analyze image" });
-  }
+    return res.json({ success: false, message: "Image scan not implemented in MVP." });
 };
 
 export { processBarcodeSearch, processImageScan };
