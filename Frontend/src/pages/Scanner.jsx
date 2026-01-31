@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Loader2, X, Upload, Zap } from "lucide-react";
+// 👇 IMPORT THE POLYFILL
+import { BarcodeDetectorPolyfill } from "@undecaf/barcode-detector-polyfill";
 import ScanModeToggle from "../components/scanner/ScanModeToggle";
 import ScannerOverlay from "../components/scanner/ScannerOverlay";
 import { useScanHistory } from "@/context/ScanHistoryContext";
@@ -14,7 +16,7 @@ const Scanner = () => {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
-  const barcodeScanReqRef = useRef(null); // Changed to requestAnimationFrame ID
+  const barcodeScanReqRef = useRef(null);
 
   const initialMode = location.state?.mode || "camera";
   const [mode, setMode] = useState(initialMode);
@@ -23,9 +25,6 @@ const Scanner = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [detectedBarcode, setDetectedBarcode] = useState(null);
-  
-  // Check support safely
-  const BARCODE_DETECTOR_SUPPORTED = typeof window !== "undefined" && "BarcodeDetector" in window;
 
   // 🔊 Play a low beep sound on successful scan
   const playBeep = () => {
@@ -45,7 +44,7 @@ const Scanner = () => {
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.15);
     } catch (e) {
-      // Audio not supported, ignore silently
+      // Audio not supported, ignore
     }
   };
 
@@ -57,15 +56,13 @@ const Scanner = () => {
         return;
       }
 
-      if (streamRef.current) {
-        stopCamera();
-      }
+      if (streamRef.current) stopCamera();
 
-      // ✅ IMPROVEMENT: Request higher resolution (1080p ideal)
-      // This helps significantly with scanning barcodes "away from the camera"
+      // iOS Safari handles constraints differently. 
+      // We try high res, but if it fails, the browser usually falls back automatically.
       const constraints = {
         video: { 
-          facingMode: "environment",
+          facingMode: "environment", // Essential for mobile rear camera
           width: { ideal: 1920 },
           height: { ideal: 1080 } 
         },
@@ -77,7 +74,7 @@ const Scanner = () => {
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // Wait for video to actually load data to prevent black screen flashes
+        // iOS requires 'playsInline' in the video tag (already added below)
         videoRef.current.onloadedmetadata = async () => {
           await videoRef.current.play();
           setCameraActive(true);
@@ -85,7 +82,7 @@ const Scanner = () => {
       }
     } catch (err) {
       console.error("Camera Error:", err);
-      // Fallback to basic constraints if high-res fails
+      // Fallback for older devices/strict permissions
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: "environment" },
@@ -115,12 +112,11 @@ const Scanner = () => {
     setCameraActive(false);
   };
 
-  // 🔍 BARCODE SCAN LOGIC (The missing piece)
+  // 🔍 BARCODE SCAN LOGIC (Updated for Cross-Browser Support)
   const startBarcodeScan = async () => {
-    if (!BARCODE_DETECTOR_SUPPORTED || !videoRef.current) return;
+    if (!videoRef.current) return;
 
-    // ✅ IMPROVEMENT: Define formats explicitly to speed up detection
-    // Removing rarely used formats makes the detector run faster per frame
+    // Supported formats
     const formats = [
       "ean_13", "ean_8", 
       "upc_a", "upc_e", 
@@ -129,28 +125,34 @@ const Scanner = () => {
     ];
 
     try {
-      const barcodeDetector = new window.BarcodeDetector({ formats });
+      // 👇 THIS IS THE FIX:
+      // Use native Window.BarcodeDetector if available (Chrome/Android)
+      // Otherwise use the imported BarcodeDetectorPolyfill (iPhone/Firefox)
+      const DetectorClass = window.BarcodeDetector || BarcodeDetectorPolyfill;
+      
+      const barcodeDetector = new DetectorClass({ formats });
 
       const renderLoop = async () => {
-        // Stop if we found something, or mode changed, or camera stopped
         if (detectedBarcode || mode !== "barcode" || !videoRef.current) return;
 
         try {
-          // ✅ IMPROVEMENT: Pass the full video element
-          // This scans the ENTIRE visible feed, not just a cutout
-          const barcodes = await barcodeDetector.detect(videoRef.current);
-
-          if (barcodes.length > 0) {
-            const bestMatch = barcodes[0].rawValue;
-            playBeep();
-            setDetectedBarcode(bestMatch);
-            stopBarcodeScan(); // Stop scanning loop immediately
-          } else {
-            // ✅ IMPROVEMENT: Use requestAnimationFrame for max speed (smooth 60fps)
-            barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
+          // Ensure video is actually playing and has dimensions before detecting
+          if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+            const barcodes = await barcodeDetector.detect(videoRef.current);
+            
+            if (barcodes.length > 0) {
+              const bestMatch = barcodes[0].rawValue;
+              playBeep();
+              setDetectedBarcode(bestMatch);
+              stopBarcodeScan();
+              return;
+            }
           }
+          
+          barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
         } catch (err) {
-          // If detection fails (e.g. video not ready), retry next frame
+          // If detection fails momentarily, just keep looping
+          // console.warn("Scan frame skipped", err);
           barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
         }
       };
@@ -194,9 +196,7 @@ const Scanner = () => {
   }, []);
 
   useEffect(() => {
-    // Only start scanning if mode is barcode, camera is ready, and we haven't found one yet
     if (mode === "barcode" && cameraActive && !capturedImage && !detectedBarcode) {
-      // Small delay to ensure video frame has valid data
       const t = setTimeout(() => startBarcodeScan(), 500);
       return () => {
         clearTimeout(t);
@@ -204,22 +204,17 @@ const Scanner = () => {
       };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, cameraActive, capturedImage, detectedBarcode]); // Removed BARCODE_DETECTOR_SUPPORTED from deps to avoid re-trigger issues
+  }, [mode, cameraActive, capturedImage, detectedBarcode]); 
 
   // 📸 CAPTURE IMAGE
   const handleCapture = () => {
     if (!videoRef.current) return;
-
     const video = videoRef.current;
     const canvas = document.createElement("canvas");
-    
-    // Capture at full video resolution for best OCR results
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
     const imgData = canvas.toDataURL("image/png");
     setCapturedImage(imgData);
     stopCamera();
@@ -230,22 +225,20 @@ const Scanner = () => {
     setCapturedImage(null);
     setDetectedBarcode(null);
     if (mode === "camera" || mode === "barcode") {
-      setTimeout(() => {
-        startCamera();
-      }, 100);
+      setTimeout(() => startCamera(), 100);
     }
   };
 
   const handleScanAgain = () => {
     setDetectedBarcode(null);
     if (mode === "barcode") {
-        // Immediate restart for snappy UX
         setTimeout(() => startCamera(), 100);
     }
   };
 
-  // ... (Keep handleUseBarcode, handleUploadClick, handleFileChange, handleUsePhoto as is) ...
-  // Added back purely for context so the component is complete, assuming logic is same as previous
+  // ... (API Calls: handleUseBarcode, handleUploadClick, handleFileChange, handleUsePhoto remain the same) ...
+  // Keep your existing API logic functions here exactly as they were in the previous file.
+  
   const handleUseBarcode = async () => {
     if (!detectedBarcode) return;
     setIsAnalyzing(true);
@@ -354,13 +347,12 @@ const Scanner = () => {
         <video
           ref={videoRef}
           muted
-          playsInline
+          playsInline // ESSENTIAL FOR IPHONE
           className="absolute inset-0 h-full w-full object-cover"
         />
       )}
 
-      {/* 🔍 OVERLAY - Pass flag to hide cutout UI if in barcode mode since we scan everywhere now? 
-          Optional: You might want to keep the overlay for UI guidance only. */}
+      {/* 🔍 OVERLAY */}
       {!capturedImage && !detectedBarcode && <ScannerOverlay isScanning={isScanning} mode={mode} />}
 
       {/* 🏷️ DETECTED BARCODE RESULT */}
@@ -418,7 +410,7 @@ const Scanner = () => {
         </div>
       )}
 
-      {/* 📸 CAPTURE BUTTON (Hidden in Barcode mode to reduce confusion, or keep if you want manual capture) */}
+      {/* 📸 CAPTURE BUTTON */}
       {mode === "camera" && !capturedImage && (
         <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
           <button
