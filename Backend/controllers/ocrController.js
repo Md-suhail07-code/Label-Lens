@@ -108,6 +108,49 @@ async function fetchProductImage(productName) {
   return null;
 }
 
+// --- Helper: Call Gemini just for Alternatives (Used in Barcode Flow) ---
+async function generateAlternativesWithGemini(productName, ingredientsText, user) {
+  try {
+    const healthCondition = user?.healthCondition || "none";
+    const allergies = user?.allergies || [];
+
+    const prompt = `
+      The user is considering eating this product: "${productName}".
+      Ingredients: "${ingredientsText}".
+      
+      User Health Context:
+      - Condition: ${healthCondition}
+      - Allergies: ${allergies.join(", ")}
+
+      TASK:
+      Suggest exactly 3 "Cleaner/Healthier" alternative products available in the INDIAN MARKET.
+      They must be specific brand names (e.g. "Tata Soulfull", "Yoga Bar", "Slurrp Farm").
+      
+      Return JSON ONLY:
+      {
+        "alternatives": ["Brand Name Product 1", "Brand Name Product 2", "Brand Name Product 3"]
+      }
+    `;
+
+    const aiResult = await model.generateContent(prompt);
+    const aiText = aiResult.response.text();
+    const cleanJson = aiText.replace(/```json|```/g, "").trim();
+    const parsed = JSON.parse(cleanJson);
+    
+    // Enrich with images
+    if (parsed.alternatives && Array.isArray(parsed.alternatives)) {
+      return await Promise.all(parsed.alternatives.map(async (altName) => {
+         const img = await fetchProductImage(altName);
+         return { name: altName, image: img, productName: altName };
+      }));
+    }
+    return [];
+  } catch (error) {
+    console.error("Gemini Alternative Generation Failed:", error.message);
+    return [];
+  }
+}
+
 // --- Data Builder for Barcode Results ---
 function buildResultData(product) {
   const nutriScore = (product.nutriscore_grade || 'unknown').toLowerCase();
@@ -126,7 +169,7 @@ function buildResultData(product) {
     verdict: derivedVerdict,
     analysisSummary: `NutriScore: ${nutriScore.toUpperCase()}.`,
     flaggedIngredients: derivedVerdict === 'unsafe' ? [{ name: "High Risk Additives", reason: "Low NutriScore (E)." }] : [],
-    alternatives: []
+    alternatives: [] // Will be populated by controller
   };
 }
 
@@ -134,7 +177,7 @@ function buildResultData(product) {
 // CONTROLLERS
 // ==========================================
 
-// 1. PROCESS BARCODE SEARCH (Restored from original file)
+// 1. PROCESS BARCODE SEARCH (Updated with Gemini Alternatives)
 const processBarcodeSearch = async (req, res) => {
   try {
     const rawBarcode = req.body?.barcode;
@@ -151,7 +194,23 @@ const processBarcodeSearch = async (req, res) => {
 
     if (product) {
       console.log('✅ Found via OFF');
-      return res.json({ success: true, data: buildResultData(product) });
+      
+      // 1. Build Basic Data from OpenFoodFacts
+      const resultData = buildResultData(product);
+
+      // 2. Call Gemini to get Alternatives (NEW STEP)
+      console.log('✨ Generating AI Alternatives...');
+      const user = req.user || {};
+      const aiAlternatives = await generateAlternativesWithGemini(
+          resultData.productName, 
+          resultData.ingredients, 
+          user
+      );
+      
+      // 3. Attach AI alternatives to result
+      resultData.alternatives = aiAlternatives;
+
+      return res.json({ success: true, data: resultData });
     }
 
     console.log('❌ Product not found in OFF.');
@@ -267,5 +326,4 @@ const processImageScan = async (req, res) => {
 // ==========================================
 // EXPORTS
 // ==========================================
-// Using named exports to match your route file imports
 export { processBarcodeSearch, processImageScan };
