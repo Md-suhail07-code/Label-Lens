@@ -7,10 +7,9 @@ import {
   ChevronDown, 
   ChevronUp, 
   AlertTriangle, 
-  Skull, 
-  Ban, 
   CheckCircle, 
-  Loader2 
+  Loader2,
+  FileText
 } from 'lucide-react';
 import { useScanHistory } from '@/context/ScanHistoryContext';
 
@@ -133,29 +132,6 @@ function ProductHeader({ status, productName, productImage, riskScore, onBack, o
              <span className="bg-gray-900 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg text-center leading-tight line-clamp-1 max-w-full">
                {productName || "Unknown Product"}
              </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// --- COMPONENT: AI INSIGHT ---
-function AIInsight({ analysis }) {
-  const text = analysis || "No analysis available.";
-  return (
-    <div className="px-6 w-full">
-      <div className="bg-white/80 backdrop-blur-xl border border-purple-100 rounded-[24px] p-5 shadow-sm relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-24 h-24 bg-purple-100 rounded-full blur-[40px] opacity-40" />
-        
-        <div className="relative z-10">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-purple-600 text-lg">✦</span>
-            <h3 className="font-bold text-gray-900 text-base">AI Assessment</h3>
-          </div>
-          
-          <div className="text-gray-600 text-sm leading-relaxed">
-            {text}
           </div>
         </div>
       </div>
@@ -335,7 +311,6 @@ const ResultsPage = () => {
   }, [result]);
 
   const fetchAlternativesImages = async (altObjects) => {
-    // If images already exist, skip fetch
     if (altObjects[0]?.image) {
       setAlternatives(altObjects);
       setLoadingAlts(false);
@@ -373,15 +348,34 @@ const ResultsPage = () => {
     setLoadingAlts(false);
   };
 
+  // --- SHARE FUNCTIONALITY ---
+  const handleShare = async () => {
+    const productName = result?.productName || "Scanned Product";
+    const riskScore = result?.score || result?.riskScore || "N/A";
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Scan Result: ${productName}`,
+          text: `I just scanned ${productName} to check for harmful ingredients. It has a risk score of ${riskScore}/100.`,
+          url: window.location.href, // Or your app's download link
+        });
+      } catch (error) {
+        console.log('Error sharing:', error);
+      }
+    } else {
+      // Fallback for browsers/webviews that don't support Web Share API
+      alert("Share feature is not supported on this browser.");
+    }
+  };
+
   // Safe check before render
   if (!result) return null;
 
-  // Real data from Open Food Facts: NAME, IMAGE URL, INGREDIENTS
+  // Real data setup
   const productName = result.productName || "Scanned Product";
   const productImage = result.image || null;
   const ingredients = result.ingredients || result.analysisSummary || "Ingredients not available.";
-  // Placeholders for the rest
-  const analysisSummary = result.analysisSummary || "Product info from Open Food Facts. Detailed analysis coming soon.";
   const flaggedIngredients = result.flaggedIngredients || [];
 
   const isSafe = (result.verdict || "").toLowerCase() === "safe";
@@ -389,43 +383,11 @@ const ResultsPage = () => {
   const status = isSafe ? "safe" : isModerate ? "moderate" : "unsafe";
   const riskScore = typeof result.score === "number" ? result.score : (typeof result.riskScore === "number" ? result.riskScore : (isSafe ? 10 : 90));
 
-  const statusLabel = status === "safe" ? "SAFE" : status === "moderate" ? "CAUTION" : "AVOID";
-
-  const handleShare = async () => {
-    const shareText = `${productName} – ${statusLabel} (Label Lens)\n\nScanned with Label Lens. Risk score: ${riskScore}/100`;
-    const shareData = {
-      title: productName,
-      text: shareText,
-    };
-
-    if (navigator.share) {
-      try {
-        await navigator.share(shareData);
-      } catch (err) {
-        if (err.name !== "AbortError") {
-          try {
-            await navigator.clipboard.writeText(shareText);
-            alert("Copied to clipboard!");
-          } catch {
-            alert("Sharing failed. Try copying manually.");
-          }
-        }
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(shareText);
-        alert("Copied to clipboard!");
-      } catch {
-        alert("Sharing not supported. Try copying manually.");
-      }
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center font-sans">
-      <div className="w-full max-w-md bg-white min-h-screen shadow-2xl overflow-hidden flex flex-col">
+        <div className="w-full max-w-md bg-white min-h-screen shadow-2xl overflow-hidden flex flex-col">
         
-        {/* Header: name and image from OFF (or placeholder) */}
+        {/* Header: Pass handleShare here */}
         <ProductHeader 
           status={status}
           productName={productName}
@@ -435,66 +397,56 @@ const ResultsPage = () => {
           onShare={handleShare}
         />
 
-        <div className="flex flex-col gap-6 mt-6 pb-4 relative z-10 w-full px-6">
-           
-           {/* Ingredients from Open Food Facts */}
-           <div className="-mx-6">
-             <div className="bg-white/80 backdrop-blur-xl border border-gray-100 rounded-[24px] p-5 shadow-sm relative overflow-hidden">
-               <div className="absolute top-0 right-0 w-24 h-24 bg-gray-100 rounded-full blur-[40px] opacity-40" />
-               <div className="relative z-10">
-                 <div className="flex items-center gap-2 mb-2">
-                   <h3 className="font-bold text-gray-900 text-base">Ingredients</h3>
+           {/* Content Container with negative margin adjustment for the cards */}
+           <div className="px-6 -mt-4 relative z-20 flex flex-col gap-3">
+             
+             {/* Ingredients Card */}
+             <div className="w-full bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
+               <div className="flex items-center gap-3 mb-2">
+                 <div className="p-2 rounded-full bg-blue-50">
+                    <FileText className="w-4 h-4 text-blue-600" />
                  </div>
-                 <div className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap max-h-[4.5rem] overflow-y-auto">
-                   {ingredients}
-                 </div>
+                 <span className="font-bold text-xs tracking-wider uppercase text-gray-500">Ingredients</span>
                </div>
+               <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
+                 {ingredients}
+               </p>
              </div>
-           </div>
 
-           {/* AI Insight Card (placeholder) */}
-           <div className="-mx-6">
-             <AIInsight analysis={analysisSummary} />
-           </div>
-           
-           <div className="flex flex-col gap-1 -mt-2">
-             {flaggedIngredients.length > 0 ? (
-                <>
+             {/* Risk Analysis Section */}
+             <div className="flex flex-col gap-1">
+               {flaggedIngredients.length > 0 ? (
                   <RiskAccordion 
                     title="Harmful Ingredients" 
                     theme="red"
                     icon={<AlertTriangle className="w-5 h-5" />}
                     items={flaggedIngredients}
                   />
-                  {/* If you have categorized data in 'result', you can add more accordions here.
-                      For now, we assume all flagged items go into the main red accordion. 
-                   */}
-                </>
-             ) : (
-               /* Safe State Card if no ingredients flagged */
-               <div className="bg-green-50 border border-green-100 rounded-[20px] p-5 flex items-center gap-4">
-                 <div className="bg-green-100 p-3 rounded-full">
-                    <CheckCircle className="w-6 h-6 text-green-600" />
+               ) : (
+                 /* Safe State Card */
+                 <div className="bg-green-50 border border-green-100 rounded-[20px] p-5 flex items-center gap-4">
+                   <div className="bg-green-100 p-3 rounded-full">
+                      <CheckCircle className="w-6 h-6 text-green-600" />
+                   </div>
+                   <div>
+                      <h4 className="font-bold text-gray-900 text-sm">Clean Label</h4>
+                      <p className="text-xs text-gray-600">No harmful additives detected.</p>
+                   </div>
                  </div>
-                 <div>
-                    <h4 className="font-bold text-gray-900 text-sm">Clean Label</h4>
-                    <p className="text-xs text-gray-600">No harmful additives detected.</p>
-                 </div>
-               </div>
-             )}
-           </div>
+               )}
+             </div>
 
-           <div className="h-px bg-gray-100 mx-2" /> 
+             <div className="h-px bg-gray-100 mx-2 my-2" /> 
 
-           {/* Better Alternatives Section */}
-           <div className="-mx-6">
-              <BetterAlternatives 
-                alternatives={alternatives}
-                loading={loadingAlts}
-              />
+             {/* Better Alternatives Section */}
+             <div className="-mx-6">
+                <BetterAlternatives 
+                  alternatives={alternatives}
+                  loading={loadingAlts}
+                />
+             </div>
            </div>
         </div>
-      </div>
     </div>
   );
 };
