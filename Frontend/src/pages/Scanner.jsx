@@ -2,8 +2,14 @@ import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Loader2, X, Upload, Zap } from "lucide-react";
-// 👇 IMPORT THE POLYFILL
+// 👇 IMPORT THE POLYFILL (required for iOS Safari – no native BarcodeDetector)
 import { BarcodeDetectorPolyfill } from "@undecaf/barcode-detector-polyfill";
+
+// Install polyfill on window when native API is missing (iPhone, Firefox, etc.)
+if (typeof window !== "undefined" && !window.BarcodeDetector) {
+  window.BarcodeDetector = BarcodeDetectorPolyfill;
+}
+
 import ScanModeToggle from "../components/scanner/ScanModeToggle";
 import ScannerOverlay from "../components/scanner/ScannerOverlay";
 import { useScanHistory } from "@/context/ScanHistoryContext";
@@ -17,6 +23,8 @@ const Scanner = () => {
   const streamRef = useRef(null);
   const fileInputRef = useRef(null);
   const barcodeScanReqRef = useRef(null);
+  const barcodeLastScanTimeRef = useRef(0);
+  const DETECTION_INTERVAL_MS = 380; // Throttle so WASM can finish on slower devices (e.g. iPhone)
 
   const initialMode = location.state?.mode || "camera";
   const [mode, setMode] = useState(initialMode);
@@ -25,6 +33,8 @@ const Scanner = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [detectedBarcode, setDetectedBarcode] = useState(null);
+  const [barcodeFromUpload, setBarcodeFromUpload] = useState(null);
+  const [isDetectingBarcodeFromUpload, setIsDetectingBarcodeFromUpload] = useState(false);
 
   // 🔊 Play a low beep sound on successful scan
   const playBeep = () => {
@@ -112,34 +122,46 @@ const Scanner = () => {
     setCameraActive(false);
   };
 
-  // 🔍 BARCODE SCAN LOGIC (Updated for Cross-Browser Support)
+  // 🔍 BARCODE SCAN LOGIC (Cross-browser: native on Chrome/Android, polyfill on iOS/Firefox)
   const startBarcodeScan = async () => {
     if (!videoRef.current) return;
 
-    // Supported formats
     const formats = [
-      "ean_13", "ean_8", 
-      "upc_a", "upc_e", 
-      "code_128", "code_39", 
+      "ean_13", "ean_8",
+      "upc_a", "upc_e",
+      "code_128", "code_39",
       "qr_code"
     ];
 
     try {
-      // 👇 THIS IS THE FIX:
-      // Use native Window.BarcodeDetector if available (Chrome/Android)
-      // Otherwise use the imported BarcodeDetectorPolyfill (iPhone/Firefox)
-      const DetectorClass = window.BarcodeDetector || BarcodeDetectorPolyfill;
-      
+      // window.BarcodeDetector is native where supported, or our polyfill (installed at top of file)
+      const DetectorClass = window.BarcodeDetector;
+      if (!DetectorClass) {
+        console.error("BarcodeDetector not available");
+        return;
+      }
+
       const barcodeDetector = new DetectorClass({ formats });
+      barcodeLastScanTimeRef.current = 0;
 
       const renderLoop = async () => {
         if (detectedBarcode || mode !== "barcode" || !videoRef.current) return;
 
-        try {
-          // Ensure video is actually playing and has dimensions before detecting
-          if (videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
-            const barcodes = await barcodeDetector.detect(videoRef.current);
-            
+        const video = videoRef.current;
+        const now = Date.now();
+        const timeSinceLastScan = now - barcodeLastScanTimeRef.current;
+
+        // 1) Video must be playing with real dimensions (critical on iOS – often 0 until ready)
+        const hasDimensions = video.videoWidth > 0 && video.videoHeight > 0;
+        const isReady = video.readyState >= video.HAVE_ENOUGH_DATA;
+
+        // 2) Throttle: run detection at most every DETECTION_INTERVAL_MS so WASM can finish on slower devices
+        const shouldScan = hasDimensions && isReady && timeSinceLastScan >= DETECTION_INTERVAL_MS;
+
+        if (shouldScan) {
+          barcodeLastScanTimeRef.current = now;
+          try {
+            const barcodes = await barcodeDetector.detect(video);
             if (barcodes.length > 0) {
               const bestMatch = barcodes[0].rawValue;
               playBeep();
@@ -147,14 +169,12 @@ const Scanner = () => {
               stopBarcodeScan();
               return;
             }
+          } catch {
+            // Single frame failure (e.g. WASM busy) – keep scanning
           }
-          
-          barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
-        } catch (err) {
-          // If detection fails momentarily, just keep looping
-          // console.warn("Scan frame skipped", err);
-          barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
         }
+
+        barcodeScanReqRef.current = requestAnimationFrame(renderLoop);
       };
 
       renderLoop();
@@ -168,6 +188,30 @@ const Scanner = () => {
       cancelAnimationFrame(barcodeScanReqRef.current);
       barcodeScanReqRef.current = null;
     }
+  };
+
+  // Detect barcode from a static image (data URL or URL) – used for upload in barcode mode
+  const detectBarcodeFromImage = (imageSrc) => {
+    const formats = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"];
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = async () => {
+        try {
+          const DetectorClass = window.BarcodeDetector;
+          if (!DetectorClass) {
+            resolve(null);
+            return;
+          }
+          const detector = new DetectorClass({ formats });
+          const barcodes = await detector.detect(img);
+          resolve(barcodes.length > 0 ? barcodes[0].rawValue : null);
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = imageSrc;
+    });
   };
 
   useEffect(() => {
@@ -184,7 +228,10 @@ const Scanner = () => {
 
   useEffect(() => {
     if (mode === "barcode") {
-        setDetectedBarcode(null);
+      setDetectedBarcode(null);
+    } else {
+      setBarcodeFromUpload(null);
+      setIsDetectingBarcodeFromUpload(false);
     }
   }, [mode]);
 
@@ -224,6 +271,8 @@ const Scanner = () => {
   const handleRetake = async () => {
     setCapturedImage(null);
     setDetectedBarcode(null);
+    setBarcodeFromUpload(null);
+    setIsDetectingBarcodeFromUpload(false);
     if (mode === "camera" || mode === "barcode") {
       setTimeout(() => startCamera(), 100);
     }
@@ -287,12 +336,70 @@ const Scanner = () => {
     if (!file || !file.type.startsWith('image/')) return;
     const reader = new FileReader();
     reader.onload = (event) => {
-      setCapturedImage(event.target.result);
+      const dataUrl = event.target.result;
+      setCapturedImage(dataUrl);
       stopCamera();
+      if (mode === "barcode") {
+        setBarcodeFromUpload(null);
+        setIsDetectingBarcodeFromUpload(true);
+        detectBarcodeFromImage(dataUrl).then((barcode) => {
+          setBarcodeFromUpload(barcode);
+          setIsDetectingBarcodeFromUpload(false);
+        });
+      }
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
   };
 
+  // In barcode mode with uploaded image: use detected barcode (or detect now) then lookup
+  const handleUsePhotoAsBarcode = async () => {
+    if (!capturedImage) return;
+    setIsAnalyzing(true);
+    try {
+      const barcode = barcodeFromUpload ?? (await detectBarcodeFromImage(capturedImage));
+      if (!barcode) {
+        alert("No barcode found in this image. Try a clearer photo of the barcode.");
+        setIsAnalyzing(false);
+        return;
+      }
+      const backendRes = await axios.post('/api/ocr/barcode-lookup', { barcode }, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (backendRes.data.success) {
+        const data = backendRes.data.data;
+        const verdictMap = { 'Safe': 'safe', 'Moderate': 'caution', 'Risky': 'danger', 'Hazardous': 'danger' };
+        const historyItem = {
+          id: Date.now(),
+          productName: data.productName,
+          brand: data.brand || "Unknown",
+          score: data.riskScore,
+          verdict: verdictMap[data.verdict] || 'caution',
+          timestamp: new Date().toISOString(),
+          image: data.imageUrl,
+          analysisSummary: data.analysisSummary,
+          flaggedIngredients: data.flaggedIngredients,
+          alternatives: data.alternatives
+        };
+        addScan(historyItem);
+        navigate("/results", { state: { result: historyItem } });
+      } else {
+        alert(backendRes.data.message || "Product not found.");
+        setIsAnalyzing(false);
+      }
+    } catch (error) {
+      console.error("Barcode lookup failed:", error);
+      const msg = error.response?.data?.message || error.response?.data?.error ||
+        (error.code === "ECONNREFUSED" ? "Cannot reach server. Is the backend running?" : "Failed to lookup barcode.");
+      alert(msg);
+      setIsAnalyzing(false);
+    }
+  };
+
+  // In camera/photo mode: OCR + ingredient analysis
   const handleUsePhoto = async () => {
     if (!capturedImage) return;
     setIsAnalyzing(true);
@@ -330,6 +437,12 @@ const Scanner = () => {
       alert("Failed to analyze image.");
       setIsAnalyzing(false);
     }
+  };
+
+  // Use Photo: in barcode mode → detect barcode and lookup; in camera mode → OCR
+  const handleUsePhotoOrBarcode = () => {
+    if (mode === "barcode") handleUsePhotoAsBarcode();
+    else handleUsePhoto();
   };
 
   return (
@@ -440,6 +553,24 @@ const Scanner = () => {
             alt="Captured" 
             className="max-w-full max-h-[60%] rounded-xl shadow-2xl border border-gray-700 object-contain" 
           />
+          {/* Show detected barcode number in barcode mode */}
+          {mode === "barcode" && (
+            <div className="mt-4 w-full max-w-sm text-center">
+              {isDetectingBarcodeFromUpload ? (
+                <p className="text-white/70 text-sm font-medium flex items-center justify-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Detecting barcode...
+                </p>
+              ) : barcodeFromUpload ? (
+                <div className="bg-white/10 rounded-xl px-4 py-3 border border-white/20">
+                  <p className="text-white/70 text-xs font-medium uppercase tracking-wider mb-1">Detected barcode</p>
+                  <p className="text-xl font-mono font-bold text-white break-all">{barcodeFromUpload}</p>
+                </div>
+              ) : (
+                <p className="text-white/50 text-sm">No barcode detected in this image.</p>
+              )}
+            </div>
+          )}
           <div className="flex gap-4 mt-8 w-full max-w-sm justify-center">
             <button
               onClick={handleRetake}
@@ -449,11 +580,11 @@ const Scanner = () => {
               Retake
             </button>
             <button
-              onClick={handleUsePhoto}
+              onClick={handleUsePhotoOrBarcode}
               disabled={isAnalyzing}
               className="flex-1 py-3.5 rounded-xl bg-green-500 text-black font-bold hover:bg-green-400 transition flex items-center justify-center gap-2"
             >
-              {isAnalyzing ? <Loader2 className="animate-spin" /> : "Use Photo"}
+              {isAnalyzing ? <Loader2 className="animate-spin" /> : (mode === "barcode" ? "Look up barcode" : "Use Photo")}
             </button>
           </div>
         </div>
