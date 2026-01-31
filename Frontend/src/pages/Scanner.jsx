@@ -14,6 +14,9 @@ import ScanModeToggle from "../components/scanner/ScanModeToggle";
 import ScannerOverlay from "../components/scanner/ScannerOverlay";
 import { useScanHistory } from "@/context/ScanHistoryContext";
 
+// Backend base URL – use same as Login/Signup so barcode lookup hits the API in production
+const API_BASE = import.meta.env.VITE_API_URL || "https://label-lens-backend.onrender.com";
+
 const Scanner = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -298,11 +301,10 @@ const Scanner = () => {
     console.log("Sending barcode to backend:", barcodeToSend); // Check browser console
 
     try {
-      const backendRes = await axios.post('/api/ocr/barcode-lookup', 
+      const backendRes = await axios.post(`${API_BASE}/api/ocr/barcode-lookup`, 
         { barcode: barcodeToSend }, // Payload
         {
           headers: {
-            // Ensure token is present if your route is protected
             'Authorization': `Bearer ${localStorage.getItem('accessToken')}`, 
             'Content-Type': 'application/json'
           }
@@ -317,10 +319,10 @@ const Scanner = () => {
           id: Date.now(),
           productName: data.productName,
           ingredients: data.ingredients,
-          image: data.imageUrl,
+          image: data.image || data.imageUrl,
           brand: data.brand || "—",
           score: data.riskScore ?? 0,
-          verdict: "safe", // Placeholder: OFF data only, no risk analysis
+          verdict: (data.verdict || "safe").toLowerCase(),
           analysisSummary: data.analysisSummary || "Product info from Open Food Facts.",
           flaggedIngredients: data.flaggedIngredients || [],
           alternatives: data.alternatives || [],
@@ -374,7 +376,7 @@ const Scanner = () => {
         return;
       }
       const barcodeToSend = String(barcode).replace(/\D/g, "").trim() || barcode;
-      const backendRes = await axios.post('/api/ocr/barcode-lookup', { barcode: barcodeToSend }, {
+      const backendRes = await axios.post(`${API_BASE}/api/ocr/barcode-lookup`, { barcode: barcodeToSend }, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
           'Content-Type': 'application/json'
@@ -386,10 +388,10 @@ const Scanner = () => {
           id: Date.now(),
           productName: data.productName,
           ingredients: data.ingredients,
-          image: data.imageUrl,
+          image: data.image || data.imageUrl,
           brand: data.brand || "—",
           score: data.riskScore ?? 0,
-          verdict: "safe", // Placeholder: OFF data only, no risk analysis
+          verdict: (data.verdict || "safe").toLowerCase(),
           analysisSummary: data.analysisSummary || "Product info from Open Food Facts.",
           flaggedIngredients: data.flaggedIngredients || [],
           alternatives: data.alternatives || [],
