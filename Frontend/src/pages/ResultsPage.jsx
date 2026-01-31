@@ -409,7 +409,7 @@ const ResultsPage = () => {
                  <div className="flex items-center gap-2 mb-2">
                    <h3 className="font-bold text-gray-900 text-base">Ingredients</h3>
                  </div>
-                 <div className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
+                 <div className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap max-h-[4.5rem] overflow-y-auto">
                    {ingredients}
                  </div>
                </div>
