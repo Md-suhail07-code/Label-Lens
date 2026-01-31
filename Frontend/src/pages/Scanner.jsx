@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Loader2, X, Upload, Zap } from "lucide-react";
+import { Loader2, X, Upload, Barcode } from "lucide-react";
 // 👇 IMPORT THE POLYFILL (required for iOS Safari – no native BarcodeDetector)
 import { BarcodeDetectorPolyfill } from "@undecaf/barcode-detector-polyfill";
 
@@ -29,7 +29,7 @@ const Scanner = () => {
   const barcodeLastScanTimeRef = useRef(0);
   const DETECTION_INTERVAL_MS = 380; // Throttle so WASM can finish on slower devices (e.g. iPhone)
 
-  const initialMode = location.state?.mode || "camera";
+  const initialMode = location.state?.mode || "barcode";
   const [mode, setMode] = useState(initialMode);
   const [isScanning, setIsScanning] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
@@ -39,8 +39,8 @@ const Scanner = () => {
   const [barcodeFromUpload, setBarcodeFromUpload] = useState(null);
   const [isDetectingBarcodeFromUpload, setIsDetectingBarcodeFromUpload] = useState(false);
 
-  // 🔊 Play a low beep sound on successful scan
-  const playBeep = () => {
+  // 🔊 Play beep + vibrate on successful scan
+  const onScanSuccess = () => {
     try {
       const audioContext = new (window.AudioContext || window.webkitAudioContext)();
       const oscillator = audioContext.createOscillator();
@@ -56,9 +56,10 @@ const Scanner = () => {
 
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.15);
-    } catch (e) {
+    } catch {
       // Audio not supported, ignore
     }
+    if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   };
 
   // 🎥 START CAMERA
@@ -167,7 +168,7 @@ const Scanner = () => {
             const barcodes = await barcodeDetector.detect(video);
             if (barcodes.length > 0) {
               const bestMatch = barcodes[0].rawValue;
-              playBeep();
+              onScanSuccess();
               setDetectedBarcode(bestMatch);
               stopBarcodeScan();
               return;
@@ -467,8 +468,8 @@ const Scanner = () => {
         className="hidden"
       />
 
-      {/* 🎥 CAMERA STREAM */}
-      {(mode === "camera" || mode === "barcode") && !capturedImage && !detectedBarcode && (
+      {/* 🎥 CAMERA STREAM - keep visible when barcode found so translucent overlay shows feed */}
+      {(mode === "camera" || mode === "barcode") && !capturedImage && (
         <video
           ref={videoRef}
           muted
@@ -480,31 +481,33 @@ const Scanner = () => {
       {/* 🔍 OVERLAY */}
       {!capturedImage && !detectedBarcode && <ScannerOverlay isScanning={isScanning} mode={mode} />}
 
-      {/* 🏷️ DETECTED BARCODE RESULT */}
+      {/* 🏷️ DETECTED BARCODE RESULT - translucent overlay + floating glossy card */}
       {mode === "barcode" && detectedBarcode && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 p-6 animate-in fade-in duration-200">
-          <div className="bg-white/10 p-4 rounded-full mb-4 ring-1 ring-white/20">
-            <Zap className="text-yellow-400 h-8 w-8 fill-yellow-400" />
-          </div>
-          <p className="text-white/70 text-sm font-medium uppercase tracking-wider mb-2">Barcode Found</p>
-          <p className="text-3xl font-mono font-bold text-white text-center break-all bg-gradient-to-br from-white/20 to-white/5 px-8 py-4 rounded-2xl border border-white/20 mb-8 shadow-xl backdrop-blur-md">
-            {detectedBarcode}
-          </p>
-          <div className="flex flex-col gap-3 w-full max-w-xs">
-            <button
-              onClick={handleUseBarcode}
-              disabled={isAnalyzing}
-              className="w-full py-4 rounded-xl bg-green-500 hover:bg-green-400 text-black font-bold text-lg transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:scale-100"
-            >
-              {isAnalyzing ? <Loader2 className="animate-spin" /> : "View Product Details"}
-            </button>
-            <button
-              onClick={handleScanAgain}
-              disabled={isAnalyzing}
-              className="w-full py-4 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold transition-all"
-            >
-              Scan Another
-            </button>
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm rounded-[28px] bg-black/40 backdrop-blur-xl border border-white/20 shadow-2xl p-6 flex flex-col items-center">
+            <div className="bg-white/10 p-3 rounded-full mb-3 ring-1 ring-white/20">
+              <Barcode className="text-white h-7 w-7" />
+            </div>
+            <p className="text-white/90 text-sm font-medium uppercase tracking-wider mb-3">Barcode Found</p>
+            <p className="text-2xl font-mono font-bold text-white text-center break-all bg-white/10 backdrop-blur-md px-6 py-3 rounded-2xl border border-white/20 mb-6 w-full">
+              {detectedBarcode}
+            </p>
+            <div className="flex flex-col gap-3 w-full">
+              <button
+                onClick={handleUseBarcode}
+                disabled={isAnalyzing}
+                className="w-full py-3.5 rounded-xl bg-green-500 hover:bg-green-400 text-black font-bold text-base transition-all active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:scale-100"
+              >
+                {isAnalyzing ? <Loader2 className="animate-spin" /> : "View Product Details"}
+              </button>
+              <button
+                onClick={handleScanAgain}
+                disabled={isAnalyzing}
+                className="w-full py-3.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold transition-all border border-white/10"
+              >
+                Scan Another
+              </button>
+            </div>
           </div>
         </div>
       )}
