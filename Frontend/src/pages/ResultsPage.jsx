@@ -373,10 +373,12 @@ const ResultsPage = () => {
   // Safe check before render
   if (!result) return null;
 
-  // Placeholders so page always loads (e.g. barcode lookup returns name/image from OFF, rest placeholder)
+  // Real data from Open Food Facts: NAME, IMAGE URL, INGREDIENTS
   const productName = result.productName || "Scanned Product";
   const productImage = result.image || null;
-  const analysisSummary = result.analysisSummary || "Product details loaded. AI analysis coming soon.";
+  const ingredients = result.ingredients || result.analysisSummary || "Ingredients not available.";
+  // Placeholders for the rest
+  const analysisSummary = result.analysisSummary || "Product info from Open Food Facts. Detailed analysis coming soon.";
   const flaggedIngredients = result.flaggedIngredients || [];
 
   const isSafe = (result.verdict || "").toLowerCase() === "safe";
@@ -399,7 +401,17 @@ const ResultsPage = () => {
 
         <div className="flex flex-col gap-6 mt-6 pb-4 relative z-10 w-full px-6">
            
-           {/* AI Insight Card */}
+           {/* Ingredients from Open Food Facts */}
+           <div className="-mx-6">
+             <div className="bg-white/80 backdrop-blur-xl border border-gray-100 rounded-[24px] p-5 shadow-sm">
+               <h3 className="font-bold text-gray-900 text-base mb-2">Ingredients</h3>
+               <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
+                 {ingredients}
+               </p>
+             </div>
+           </div>
+
+           {/* AI Insight Card (placeholder) */}
            <div className="-mx-6">
              <AIInsight analysis={analysisSummary} />
            </div>

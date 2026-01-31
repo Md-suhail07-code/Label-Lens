@@ -1,243 +1,92 @@
-import vision from '@google-cloud/vision';
-import { v2 as cloudinary } from 'cloudinary';
-import streamifier from 'streamifier';
-import { ScanHistory } from '../models/historyModel.js';
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
-import dotenv from 'dotenv';
+import { ScanHistory } from '../models/historyModel.js'; // Keep this if you want to save history, otherwise remove
 
-dotenv.config();
-
-const visionClient = new vision.ImageAnnotatorClient();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-// ---------- Cloudinary ----------
-const uploadFromBuffer = (buffer) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder: "label-lens-scans" },
-      (error, result) => {
-        if (result) resolve(result);
-        else reject(error);
-      }
-    );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
-  });
-};
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-
-// ---------- IMAGE SCAN (OCR + Gemini) – unchanged ----------
-const processImageScan = async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No image provided" });
-    }
-
-    const user = req.user || {};
-    const healthCondition = user.healthCondition || "none";
-    const allergies = user.allergies || [];
-
-    const uploadResult = await uploadFromBuffer(req.file.buffer);
-    const imageUrl = uploadResult.secure_url;
-
-    const [ocrResult] = await visionClient.textDetection({
-      image: { content: req.file.buffer }
-    });
-    const extractedText = ocrResult.textAnnotations?.[0]?.description || "";
-
-    if (!extractedText) {
-      return res.json({
-        success: false,
-        message: "No readable text found in image."
-      });
-    }
-
-    const prompt = `
-        You are a food ingredient risk analysis engine.
-        Analyze the following INGREDIENT LIST exactly as written:
-        "${extractedText}"
-        User Health Context:
-        - Health Condition: ${healthCondition}
-        - Allergies: ${allergies.length ? allergies.join(", ") : "None"}
-        Rules:
-        - Consider Indian packaged food context.
-        - Be conservative and factual.
-        - Do NOT give medical advice.
-        Return ONLY a valid JSON object.
-        JSON Schema:
-        {
-          "productName": "Estimated product name",
-          "riskScore": 0-100,
-          "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
-          "analysisSummary": "One short sentence summary",
-          "flaggedIngredients": [
-            { "name": "Ingredient name", "risk": "Low" | "Medium" | "High", "reason": "Simple explanation" }
-          ],
-          "alternatives": [ "Alternative 1", "Alternative 2" ]
-        }
-    `;
-
-    const aiResult = await model.generateContent(prompt);
-    const aiText = aiResult.response.text();
-    const cleanJson = aiText.replace(/```json|```/g, "").trim();
-    const parsedData = JSON.parse(cleanJson);
-
-    if (req.user) {
-      await new ScanHistory({
-        user: req.user._id,
-        scannedImageUrl: imageUrl,
-        scanType: "image_ocr",
-        productName: parsedData.productName,
-        riskScore: parsedData.riskScore,
-        verdict: parsedData.verdict,
-        analysisSummary: parsedData.analysisSummary,
-        flaggedIngredients: parsedData.flaggedIngredients,
-        alternatives: parsedData.alternatives.map(p => ({ productName: p }))
-      }).save();
-    }
-
-    res.json({
-      success: true,
-      data: {
-        imageUrl,
-        extractedText,
-        ...parsedData
-      }
-    });
-  } catch (error) {
-    console.error("LabelLens Processing Error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to analyze image"
-    });
-  }
-};
-
-// ---------- BARCODE LOOKUP (OpenFoodFacts only) – remade from scratch ----------
+// Headers are required by OpenFoodFacts to avoid being blocked
 const OFF_HEADERS = {
-  "User-Agent": "LabelLens/1.0 - Food label scanner - https://github.com/label-lens",
+  "User-Agent": "LabelLens/1.0 - Food label scanner",
   "Accept": "application/json"
 };
 
-/** Normalize barcode: digits only (strip spaces, dashes, etc.) so OFF accepts it. */
-function normalizeBarcode(value) {
-  if (value == null) return "";
-  const s = String(value).trim();
-  return s.replace(/\D/g, "");
-}
-
-/** Fetch OFF product by barcode; returns { body } or { body: null } on failure. */
-async function fetchOFFProduct(barcode) {
-  const url = `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`;
-  try {
-    const response = await axios.get(url, {
-      headers: OFF_HEADERS,
-      timeout: 15000,
-      validateStatus: () => true
-    });
-    const body = response.data || {};
-    return { body, status: response.status };
-  } catch (err) {
-    console.error("OFF request failed:", err.message);
-    return { body: null };
-  }
-}
-
 const processBarcodeSearch = async (req, res) => {
   try {
-    const raw = req.body.barcode;
-    const barcode = normalizeBarcode(raw);
+    // 1. DEBUGGING: Log exactly what the frontend sent
+    console.log("🔹 Backend received request body:", req.body);
+
+    const { barcode } = req.body;
 
     if (!barcode) {
-      return res.status(400).json({
-        success: false,
-        message: "No barcode provided."
-      });
+      console.log("❌ No barcode provided in body.");
+      return res.status(400).json({ success: false, message: "No barcode provided." });
     }
 
-    let body = null;
+    // 2. Clean the barcode (remove spaces/dashes if any)
+    const cleanBarcode = String(barcode).trim();
+    console.log(`🔹 Lookup OpenFoodFacts for: ${cleanBarcode}`);
 
-    const { body: data1 } = await fetchOFFProduct(barcode);
-    if (data1 && data1.status === 1 && data1.product) {
-      body = data1;
+    // 3. Request data from OpenFoodFacts
+    const offUrl = `https://world.openfoodfacts.org/api/v2/product/${cleanBarcode}.json`;
+    
+    const response = await axios.get(offUrl, { 
+      headers: OFF_HEADERS,
+      validateStatus: () => true // Prevent axios from throwing error on 404
+    });
+
+    // 4. Check if product exists
+    const data = response.data;
+    
+    if (response.status === 404 || data.status === 0 || !data.product) {
+      console.log("❌ Product not found in OFF database.");
+      return res.json({ success: false, message: "Product not found." });
     }
 
-    if (!body && barcode.length === 12) {
-      const { body: data2 } = await fetchOFFProduct("0" + barcode);
-      if (data2 && data2.status === 1 && data2.product) body = data2;
-    }
+    const product = data.product;
 
-    if (!body && barcode.length === 13 && barcode[0] === "0") {
-      const { body: data3 } = await fetchOFFProduct(barcode.slice(1));
-      if (data3 && data3.status === 1 && data3.product) body = data3;
-    }
+    // 5. Extract NAME, INGREDIENTS, IMAGE URL from Open Food Facts only (no Gemini)
+    const resultData = {
+      productName: product.product_name || product.product_name_en || "Unknown Product",
+      imageUrl: product.image_url || product.image_front_url || product.image_front_small_url || null,
+      ingredients: product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.",
+      // Placeholders for UI (not from OFF)
+      brand: product.brands || "Unknown Brand",
+      riskScore: 0,
+      verdict: "Info Only",
+      analysisSummary: "Product info from Open Food Facts.",
+      flaggedIngredients: [],
+      alternatives: []
+    };
 
-    if (!body || !body.product) {
-      return res.json({
-        success: false,
-        message: "Product not found in OpenFoodFacts database."
-      });
-    }
+    console.log("✅ Product found:", resultData.productName);
 
-    const p = body.product;
-
-    const productName = p.product_name || p.product_name_en || "Unknown Product";
-    const imageUrl = p.image_url || p.image_front_url || p.image_front_small_url || p.image_thumb_url || "";
-    const ingredients = p.ingredients_text || p.ingredients_text_en || "";
-    const brand = p.brands || (p.brands_tags && p.brands_tags[0]) || "Unknown";
-
-    // History model requires scannedImageUrl; use placeholder if OFF has no image
-    const scannedImageUrl = imageUrl || "https://images.openfoodfacts.org/images/icons/dist/packaging.svg";
-
-    const riskScore = 0;
-    const verdict = "Safe";
-    const analysisSummary = ingredients
-      ? "Product info from OpenFoodFacts. AI analysis coming soon."
-      : "Product found. Ingredients not available in database.";
-    const flaggedIngredients = [];
-    const alternatives = [];
-
+    // 6. Optional: Save to DB (Remove this block if you don't want to save history yet)
     if (req.user) {
-      await new ScanHistory({
-        user: req.user._id,
-        scannedImageUrl,
-        scanType: "barcode",
-        productName,
-        riskScore,
-        verdict,
-        analysisSummary,
-        flaggedIngredients,
-        alternatives: []
-      }).save();
+      try {
+        await new ScanHistory({
+          user: req.user._id,
+          scannedImageUrl: resultData.imageUrl || "https://via.placeholder.com/150",
+          scanType: "barcode",
+          productName: resultData.productName,
+          riskScore: 0,
+          verdict: "Safe",
+          analysisSummary: resultData.ingredients,
+          flaggedIngredients: [], // Empty because no AI
+          alternatives: []
+        }).save();
+      } catch (err) {
+        console.error("⚠️ Failed to save history:", err.message);
+      }
     }
 
-    res.json({
+    // 7. Send Response
+    return res.json({
       success: true,
-      data: {
-        productName,
-        brand,
-        imageUrl,
-        ingredients,
-        riskScore,
-        verdict,
-        analysisSummary,
-        flaggedIngredients,
-        alternatives
-      }
+      data: resultData
     });
-  } catch (err) {
-    console.error("Barcode Lookup Error:", err.message || err);
-    res.status(500).json({
-      success: false,
-      error: "Failed to lookup barcode"
-    });
+
+  } catch (error) {
+    console.error("🔥 Controller Error:", error);
+    return res.status(500).json({ success: false, message: "Server error during lookup." });
   }
 };
 
-export { processImageScan, processBarcodeSearch };
+// Export only what we need
+export { processBarcodeSearch };

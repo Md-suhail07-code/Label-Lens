@@ -291,30 +291,40 @@ const Scanner = () => {
   const handleUseBarcode = async () => {
     if (!detectedBarcode) return;
     setIsAnalyzing(true);
+    
+    // CLEAN THE BARCODE BEFORE SENDING
+    const barcodeToSend = String(detectedBarcode).trim();
+
+    console.log("Sending barcode to backend:", barcodeToSend); // Check browser console
+
     try {
       const backendRes = await axios.post('/api/ocr/barcode-lookup', 
-        { barcode: String(detectedBarcode) },
+        { barcode: barcodeToSend }, // Payload
         {
           headers: {
-            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+            // Ensure token is present if your route is protected
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`, 
             'Content-Type': 'application/json'
           }
         }
       );
+
+      console.log("Backend Response:", backendRes.data);
+
       if (backendRes.data.success) {
         const data = backendRes.data.data;
-        const verdictMap = { 'Safe': 'safe', 'Moderate': 'caution', 'Risky': 'danger', 'Hazardous': 'danger' };
         const historyItem = {
           id: Date.now(),
           productName: data.productName,
-          brand: data.brand || "Unknown",
-          score: data.riskScore,
-          verdict: verdictMap[data.verdict] || 'caution',
-          timestamp: new Date().toISOString(),
+          ingredients: data.ingredients,
           image: data.imageUrl,
-          analysisSummary: data.analysisSummary,
-          flaggedIngredients: data.flaggedIngredients,
-          alternatives: data.alternatives
+          brand: data.brand || "—",
+          score: data.riskScore ?? 0,
+          verdict: "safe", // Placeholder: OFF data only, no risk analysis
+          analysisSummary: data.analysisSummary || "Product info from Open Food Facts.",
+          flaggedIngredients: data.flaggedIngredients || [],
+          alternatives: data.alternatives || [],
+          timestamp: new Date().toISOString()
         };
         addScan(historyItem);
         navigate("/results", { state: { result: historyItem } });
@@ -324,7 +334,7 @@ const Scanner = () => {
       }
     } catch (error) {
       console.error("Barcode lookup failed:", error);
-      alert("Failed to lookup barcode.");
+      alert("Failed to lookup barcode. Check console for details.");
       setIsAnalyzing(false);
     }
   };
@@ -372,18 +382,18 @@ const Scanner = () => {
       });
       if (backendRes.data.success) {
         const data = backendRes.data.data;
-        const verdictMap = { 'Safe': 'safe', 'Moderate': 'caution', 'Risky': 'danger', 'Hazardous': 'danger' };
         const historyItem = {
           id: Date.now(),
           productName: data.productName,
-          brand: data.brand || "Unknown",
-          score: data.riskScore,
-          verdict: verdictMap[data.verdict] || 'caution',
-          timestamp: new Date().toISOString(),
+          ingredients: data.ingredients,
           image: data.imageUrl,
-          analysisSummary: data.analysisSummary,
-          flaggedIngredients: data.flaggedIngredients,
-          alternatives: data.alternatives
+          brand: data.brand || "—",
+          score: data.riskScore ?? 0,
+          verdict: "safe", // Placeholder: OFF data only, no risk analysis
+          analysisSummary: data.analysisSummary || "Product info from Open Food Facts.",
+          flaggedIngredients: data.flaggedIngredients || [],
+          alternatives: data.alternatives || [],
+          timestamp: new Date().toISOString()
         };
         addScan(historyItem);
         navigate("/results", { state: { result: historyItem } });
