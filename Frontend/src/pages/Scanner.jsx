@@ -27,6 +27,7 @@ const Scanner = () => {
   const fileInputRef = useRef(null);
   const barcodeScanReqRef = useRef(null);
   const barcodeLastScanTimeRef = useRef(0);
+  const audioContextRef = useRef(null);
   const DETECTION_INTERVAL_MS = 380; // Throttle so WASM can finish on slower devices (e.g. iPhone)
 
   const initialMode = location.state?.mode || "barcode";
@@ -39,25 +40,32 @@ const Scanner = () => {
   const [barcodeFromUpload, setBarcodeFromUpload] = useState(null);
   const [isDetectingBarcodeFromUpload, setIsDetectingBarcodeFromUpload] = useState(false);
 
-  // 🔊 Play beep + vibrate on successful scan
+  // 🔊 Play beep + vibrate on successful scan (uses pre-resumed AudioContext from camera start)
   const onScanSuccess = () => {
     try {
-      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      const oscillator = audioContext.createOscillator();
-      const gainNode = audioContext.createGain();
-
+      let ctx = audioContextRef.current;
+      if (!ctx) {
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = ctx;
+      }
+      if (ctx.state === "suspended") ctx.resume();
+      const oscillator = ctx.createOscillator();
+      const gainNode = ctx.createGain();
       oscillator.connect(gainNode);
-      gainNode.connect(audioContext.destination);
-
+      gainNode.connect(ctx.destination);
       oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
-      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
-
-      oscillator.start(audioContext.currentTime);
-      oscillator.stop(audioContext.currentTime + 0.15);
+      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+      oscillator.start(ctx.currentTime);
+      oscillator.stop(ctx.currentTime + 0.15);
     } catch {
-      // Audio not supported, ignore
+      // Fallback: try HTML5 Audio with inline base64 beep
+      try {
+        const beep = new Audio("data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUtvT19XQVZFZm10IA==");
+        beep.volume = 0.5;
+        beep.play().catch(() => {});
+      } catch {}
     }
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   };
@@ -86,6 +94,12 @@ const Scanner = () => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
       streamRef.current = stream;
+      // Pre-resume AudioContext while we have user gesture (camera permission = user interaction)
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audioContextRef.current = ctx;
+        if (ctx.state === "suspended") await ctx.resume();
+      } catch {}
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         // iOS requires 'playsInline' in the video tag (already added below)
