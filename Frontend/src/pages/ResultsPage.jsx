@@ -403,11 +403,16 @@ const ResultsPage = () => {
            
            {/* Ingredients from Open Food Facts */}
            <div className="-mx-6">
-             <div className="bg-white/80 backdrop-blur-xl border border-gray-100 rounded-[24px] p-5 shadow-sm">
-               <h3 className="font-bold text-gray-900 text-base mb-2">Ingredients</h3>
-               <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
-                 {ingredients}
-               </p>
+             <div className="bg-white/80 backdrop-blur-xl border border-gray-100 rounded-[24px] p-5 shadow-sm relative overflow-hidden">
+               <div className="absolute top-0 right-0 w-24 h-24 bg-gray-100 rounded-full blur-[40px] opacity-40" />
+               <div className="relative z-10">
+                 <div className="flex items-center gap-2 mb-2">
+                   <h3 className="font-bold text-gray-900 text-base">Ingredients</h3>
+                 </div>
+                 <div className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
+                   {ingredients}
+                 </div>
+               </div>
              </div>
            </div>
 
