@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { Loader2, X } from "lucide-react";
+import { Loader2, X, Upload } from "lucide-react";
 import ScanModeToggle from "../components/scanner/ScanModeToggle";
 import ScannerOverlay from "../components/scanner/ScannerOverlay";
 import { useScanHistory } from "@/context/ScanHistoryContext";
@@ -13,12 +13,14 @@ const Scanner = () => {
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const initialMode = location.state?.mode || "camera";
   const [mode, setMode] = useState(initialMode);
   const [isScanning, setIsScanning] = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false); // New loading state
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
 
   // 🎥 START CAMERA
   const startCamera = async () => {
@@ -27,7 +29,11 @@ const Scanner = () => {
         alert("Camera not supported");
         return;
       }
-      if (streamRef.current) return;
+
+      // Stop existing stream first if any
+      if (streamRef.current) {
+        stopCamera();
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
@@ -38,10 +44,12 @@ const Scanner = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
+        setCameraActive(true);
       }
     } catch (err) {
       console.error(err);
       alert("Camera permission denied. Please allow access.");
+      setCameraActive(false);
     }
   };
 
@@ -53,6 +61,7 @@ const Scanner = () => {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    setCameraActive(false);
   };
 
   useEffect(() => {
@@ -92,13 +101,43 @@ const Scanner = () => {
     ctx.drawImage(video, sx, sy, frameSize.width, frameSize.height, 0, 0, frameSize.width, frameSize.height);
 
     const imgData = canvas.toDataURL("image/png");
-    setCapturedImage(imgData); 
+    setCapturedImage(imgData);
+    stopCamera(); // Stop camera when image is captured
   };
 
   // 🟢 RETAKE IMAGE
-  const handleRetake = () => {
+  const handleRetake = async () => {
     setCapturedImage(null);
-    if (mode === "camera" || mode === "barcode") startCamera();
+    // Restart camera after small delay to ensure clean state
+    if (mode === "camera" || mode === "barcode") {
+      setTimeout(() => {
+        startCamera();
+      }, 100);
+    }
+  };
+
+  // 📤 UPLOAD IMAGE FROM GALLERY
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Check if it's an image
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file');
+      return;
+    }
+
+    // Convert to base64 and display
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setCapturedImage(event.target.result);
+      stopCamera(); // Stop camera when file is uploaded
+    };
+    reader.readAsDataURL(file);
   };
 
   // ✅ USE PHOTO (The New Logic)
@@ -115,7 +154,7 @@ const Scanner = () => {
       formData.append('image', blob, 'scan.png');
 
       // 2. Call Backend API
-      const backendRes = await axios.post('https://label-lens-backend.onrender.com/api/ocr/process-scan', formData, {
+      const backendRes = await axios.post('/api/ocr/process-scan', formData, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
           'Content-Type': 'multipart/form-data'
@@ -159,6 +198,15 @@ const Scanner = () => {
 
   return (
     <div className="relative h-screen w-full bg-black overflow-hidden">
+      {/* Hidden file input for image upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+        className="hidden"
+      />
+
       {/* 🎥 CAMERA STREAM */}
       {(mode === "camera" || mode === "barcode") && !capturedImage && (
         <video
@@ -185,12 +233,27 @@ const Scanner = () => {
         <ScanModeToggle mode={mode} onModeChange={setMode} />
       </div>
 
+      {/* 📤 UPLOAD BUTTON */}
+      {(mode === "camera" || mode === "barcode") && !capturedImage && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20">
+          <button
+            onClick={handleUploadClick}
+            className="rounded-full bg-black/50 backdrop-blur-sm p-3 text-white hover:bg-black/70 transition-all flex items-center gap-2 px-4"
+            disabled={isAnalyzing}
+          >
+            <Upload size={20} />
+            <span className="text-sm font-medium">Upload</span>
+          </button>
+        </div>
+      )}
+
       {/* 📸 CAPTURE BUTTON */}
       {(mode === "camera" || mode === "barcode") && !capturedImage && (
         <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
           <button
             onClick={handleCapture}
-            className="h-20 w-20 rounded-full border-4 border-white/50 bg-white/20 flex items-center justify-center backdrop-blur-sm"
+            disabled={!cameraActive}
+            className="h-20 w-20 rounded-full border-4 border-white/50 bg-white/20 flex items-center justify-center backdrop-blur-sm disabled:opacity-50"
           >
             <div className="h-16 w-16 rounded-full bg-white shadow-lg active:scale-90 transition-transform" />
           </button>
