@@ -1,0 +1,238 @@
+import React, { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import axios from "axios";
+import { Loader2, X } from "lucide-react";
+import ScanModeToggle from "../components/scanner/ScanModeToggle";
+import ScannerOverlay from "../components/scanner/ScannerOverlay";
+import { useScanHistory } from "@/context/ScanHistoryContext";
+
+const Scanner = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { addScan } = useScanHistory();
+
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const initialMode = location.state?.mode || "camera";
+  const [mode, setMode] = useState(initialMode);
+  const [isScanning, setIsScanning] = useState(false);
+  const [capturedImage, setCapturedImage] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false); // New loading state
+
+  // 🎥 START CAMERA
+  const startCamera = async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        alert("Camera not supported");
+        return;
+      }
+      if (streamRef.current) return;
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Camera permission denied. Please allow access.");
+    }
+  };
+
+  // 🛑 STOP CAMERA
+  const stopCamera = () => {
+    if (!streamRef.current) return;
+    streamRef.current.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  useEffect(() => {
+    if (mode === "camera" || mode === "barcode") {
+      startCamera();
+      setIsScanning(true);
+    } else {
+      stopCamera();
+      setIsScanning(false);
+      if (mode === "manual") navigate("/manual-entry");
+    }
+  }, [mode]);
+
+  useEffect(() => {
+    return () => stopCamera();
+  }, []);
+
+  // 📸 CAPTURE IMAGE
+  const handleCapture = () => {
+    if (!videoRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = document.createElement("canvas");
+    const frameSize = mode === "camera" 
+      ? { width: 300, height: 300 } 
+      : { width: 320, height: 160 };
+
+    canvas.width = frameSize.width;
+    canvas.height = frameSize.height;
+    const ctx = canvas.getContext("2d");
+
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+    const sx = (videoWidth - frameSize.width) / 2;
+    const sy = (videoHeight - frameSize.height) / 2;
+
+    ctx.drawImage(video, sx, sy, frameSize.width, frameSize.height, 0, 0, frameSize.width, frameSize.height);
+
+    const imgData = canvas.toDataURL("image/png");
+    setCapturedImage(imgData); 
+  };
+
+  // 🟢 RETAKE IMAGE
+  const handleRetake = () => {
+    setCapturedImage(null);
+    if (mode === "camera" || mode === "barcode") startCamera();
+  };
+
+  // ✅ USE PHOTO (The New Logic)
+  const handleUsePhoto = async () => {
+    if (!capturedImage) return;
+    
+    setIsAnalyzing(true);
+
+    try {
+      // 1. Convert Base64 to Blob
+      const response = await fetch(capturedImage);
+      const blob = await response.blob();
+      const formData = new FormData();
+      formData.append('image', blob, 'scan.png');
+
+      // 2. Call Backend API
+      const backendRes = await axios.post('http://localhost:5000/api/ocr/process-scan', formData, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      if (backendRes.data.success) {
+        const data = backendRes.data.data;
+
+        // 3. Format Data for History
+        const verdictMap = {
+          'Safe': 'safe',
+          'Moderate': 'caution',
+          'Risky': 'danger',
+          'Hazardous': 'danger'
+        };
+
+        const historyItem = {
+          id: Date.now(),
+          productName: data.productName || "Unknown Product",
+          brand: data.brand || "Generic",
+          score: data.riskScore,
+          verdict: verdictMap[data.verdict] || 'caution',
+          timestamp: new Date().toISOString(),
+          image: data.imageUrl || capturedImage, // Prefer Cloudinary URL
+          analysisSummary: data.analysisSummary,
+          flaggedIngredients: data.flaggedIngredients,
+          alternatives: data.alternatives
+        };
+
+        // 4. Save to Context & Navigate
+        addScan(historyItem);
+        navigate("/results", { state: { result: historyItem } });
+      }
+    } catch (error) {
+      console.error("Analysis failed:", error);
+      alert("Failed to analyze image. Please try again.");
+      setIsAnalyzing(false); // Only stop loading on error (on success we navigate away)
+    }
+  };
+
+  return (
+    <div className="relative h-screen w-full bg-black overflow-hidden">
+      {/* 🎥 CAMERA STREAM */}
+      {(mode === "camera" || mode === "barcode") && !capturedImage && (
+        <video
+          ref={videoRef}
+          autoPlay
+          muted
+          playsInline
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      )}
+
+      {/* 🔍 OVERLAY */}
+      {!capturedImage && <ScannerOverlay isScanning={isScanning} mode={mode} />}
+
+      {/* 🔝 HEADER */}
+      <div className="absolute top-4 left-4 right-4 z-20 flex justify-between items-center">
+        <button
+          onClick={() => navigate('/home')}
+          className="rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+          disabled={isAnalyzing}
+        >
+          <X size={24} />
+        </button>
+        <ScanModeToggle mode={mode} onModeChange={setMode} />
+      </div>
+
+      {/* 📸 CAPTURE BUTTON */}
+      {(mode === "camera" || mode === "barcode") && !capturedImage && (
+        <div className="absolute bottom-10 left-0 right-0 flex justify-center z-20">
+          <button
+            onClick={handleCapture}
+            className="h-20 w-20 rounded-full border-4 border-white/50 bg-white/20 flex items-center justify-center backdrop-blur-sm"
+          >
+            <div className="h-16 w-16 rounded-full bg-white shadow-lg active:scale-90 transition-transform" />
+          </button>
+        </div>
+      )}
+
+      {/* 🖼 CAPTURED IMAGE PREVIEW UI */}
+      {capturedImage && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/90 p-4">
+          <img 
+            src={capturedImage} 
+            alt="Captured" 
+            className="max-w-full max-h-[60%] rounded-xl shadow-2xl border border-gray-700" 
+          />
+          
+          <div className="flex gap-6 mt-8">
+            <button
+              onClick={handleRetake}
+              disabled={isAnalyzing}
+              className="px-8 py-3 rounded-full bg-gray-700 text-white font-semibold hover:bg-gray-600 transition disabled:opacity-50"
+            >
+              Retake
+            </button>
+            <button
+              onClick={handleUsePhoto}
+              disabled={isAnalyzing}
+              className="px-8 py-3 rounded-full bg-green-600 text-white font-semibold hover:bg-green-500 shadow-lg transition flex items-center gap-2 disabled:opacity-50"
+            >
+              {isAnalyzing ? (
+                <>
+                  <Loader2 className="animate-spin h-5 w-5" />
+                  Analyzing...
+                </>
+              ) : (
+                "Use Photo"
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Scanner;

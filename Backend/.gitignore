@@ -1,0 +1,4 @@
+# Ignore these files anywhere in the project
+.env
+service-account-key.json
+node_modules/
