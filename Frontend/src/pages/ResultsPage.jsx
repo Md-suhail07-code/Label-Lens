@@ -139,6 +139,7 @@ function ProductHeader({ status, productName, productImage, riskScore, onBack })
 
 // --- COMPONENT: AI INSIGHT ---
 function AIInsight({ analysis }) {
+  const text = analysis || "No analysis available.";
   return (
     <div className="px-6 w-full">
       <div className="bg-white/80 backdrop-blur-xl border border-purple-100 rounded-[24px] p-5 shadow-sm relative overflow-hidden group">
@@ -151,7 +152,7 @@ function AIInsight({ analysis }) {
           </div>
           
           <div className="text-gray-600 text-sm leading-relaxed">
-            {analysis}
+            {text}
           </div>
         </div>
       </div>
@@ -316,14 +317,13 @@ const ResultsPage = () => {
   const [loadingAlts, setLoadingAlts] = useState(true);
 
   useEffect(() => {
-    // If no data exists in State OR Context, redirect to scanner
     if (!result) {
       navigate('/scanner');
       return;
     }
-
-    if (result.alternatives && result.alternatives.length > 0) {
-      const altNames = result.alternatives.map(a => typeof a === 'string' ? { productName: a } : a);
+    const alts = result.alternatives || [];
+    if (alts.length > 0) {
+      const altNames = alts.map(a => typeof a === 'string' ? { productName: a } : a);
       fetchAlternativesImages(altNames);
     } else {
       setLoadingAlts(false);
@@ -373,43 +373,45 @@ const ResultsPage = () => {
   // Safe check before render
   if (!result) return null;
 
-  const isSafe = (result.verdict || '').toLowerCase() === 'safe';
-  const isModerate = (result.verdict || '').toLowerCase() === 'caution' || (result.verdict || '').toLowerCase() === 'moderate';
-  
-  // Normalized Status for UI
-  const status = isSafe ? 'safe' : isModerate ? 'moderate' : 'unsafe';
-  const riskScore = result.score || result.riskScore || (isSafe ? 10 : 90);
+  // Placeholders so page always loads (e.g. barcode lookup returns name/image from OFF, rest placeholder)
+  const productName = result.productName || "Scanned Product";
+  const productImage = result.image || null;
+  const analysisSummary = result.analysisSummary || "Product details loaded. AI analysis coming soon.";
+  const flaggedIngredients = result.flaggedIngredients || [];
+
+  const isSafe = (result.verdict || "").toLowerCase() === "safe";
+  const isModerate = (result.verdict || "").toLowerCase() === "caution" || (result.verdict || "").toLowerCase() === "moderate";
+  const status = isSafe ? "safe" : isModerate ? "moderate" : "unsafe";
+  const riskScore = typeof result.score === "number" ? result.score : (typeof result.riskScore === "number" ? result.riskScore : (isSafe ? 10 : 90));
 
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center font-sans">
       <div className="w-full max-w-md bg-white min-h-screen shadow-2xl overflow-hidden flex flex-col">
         
-        {/* New Header Design */}
+        {/* Header: name and image from OFF (or placeholder) */}
         <ProductHeader 
           status={status}
-          productName={result.productName || "Scanned Product"}
-          productImage={result.image}
+          productName={productName}
+          productImage={productImage}
           riskScore={riskScore}
-          onBack={() => navigate(-1)} // Or '/scanner'
+          onBack={() => navigate(-1)}
         />
 
         <div className="flex flex-col gap-6 mt-6 pb-4 relative z-10 w-full px-6">
            
            {/* AI Insight Card */}
-           {/* Negative margin to pull it up slightly or keep flow */}
            <div className="-mx-6">
-             <AIInsight analysis={result.analysisSummary} />
+             <AIInsight analysis={analysisSummary} />
            </div>
            
            <div className="flex flex-col gap-1 -mt-2">
-             {/* Dynamic Accordions based on data */}
-             {result.flaggedIngredients && result.flaggedIngredients.length > 0 ? (
+             {flaggedIngredients.length > 0 ? (
                 <>
                   <RiskAccordion 
                     title="Harmful Ingredients" 
                     theme="red"
                     icon={<AlertTriangle className="w-5 h-5" />}
-                    items={result.flaggedIngredients}
+                    items={flaggedIngredients}
                   />
                   {/* If you have categorized data in 'result', you can add more accordions here.
                       For now, we assume all flagged items go into the main red accordion. 
@@ -434,7 +436,7 @@ const ResultsPage = () => {
            {/* Better Alternatives Section */}
            <div className="-mx-6">
               <BetterAlternatives 
-                alternatives={alternatives} 
+                alternatives={alternatives}
                 loading={loadingAlts}
               />
            </div>
