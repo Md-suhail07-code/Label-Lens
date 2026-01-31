@@ -23,7 +23,7 @@ import NotFound from "./pages/NotFound";
 import EmailVerify from "./pages/EmailVerify";
 import TestOCR from "./pages/TestOcr";
 import ResultsPage from "./pages/ResultsPage";
-import Contribute from "./pages/Contribute";
+import Contribute from "./pages/Contribute.jsx";
 
 // React Query client (JSX-safe)
 const queryClient = new QueryClient();
