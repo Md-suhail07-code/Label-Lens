@@ -23,6 +23,7 @@ import NotFound from "./pages/NotFound";
 import EmailVerify from "./pages/EmailVerify";
 import TestOCR from "./pages/TestOcr";
 import ResultsPage from "./pages/ResultsPage";
+import Contribute from "./pages/Contribute";
 
 // React Query client (JSX-safe)
 const queryClient = new QueryClient();
@@ -48,6 +49,7 @@ function App() {
                 <Route path="/scanner" element={<Scanner />} />
                 <Route path="/manual-entry" element={<ManualEntry />} />
                 <Route path="/results" element={<ResultsPage />} />
+                <Route path="/contribute" element={<Contribute />} />
                 <Route path="/history" element={<History />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/test-ocr" element={<TestOCR />} />

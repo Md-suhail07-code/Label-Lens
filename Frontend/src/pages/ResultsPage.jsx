@@ -411,6 +411,28 @@ const ResultsPage = () => {
                <p className="text-gray-600 text-sm leading-relaxed whitespace-pre-wrap">
                  {ingredients}
                </p>
+               {/* Contribute CTA when no ingredients */}
+               {(!result.ingredients ||
+                 (Array.isArray(result.ingredients) && result.ingredients.length === 0) ||
+                 (typeof ingredients === 'string' && (
+                   !ingredients.trim() ||
+                   ingredients === 'Ingredients not available.' ||
+                   ingredients.toLowerCase().includes('not available')
+                 ))) && (
+                 <div className="mt-4 p-4 rounded-xl bg-rose-50 border border-rose-100">
+                   <p className="text-sm text-gray-700 mb-3">
+                     No ingredients data for this product yet. Help make LabelLens better by contributing.
+                   </p>
+                   <button
+                     type="button"
+                     onClick={() => navigate('/contribute', { state: { barcode: result.code || result.barcode } })}
+                     className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-rose-500 text-white font-semibold text-sm hover:bg-rose-600 active:scale-[0.98] transition-all"
+                   >
+                     <span aria-hidden>❤️</span>
+                     Contribute & help improve LabelLens
+                   </button>
+                 </div>
+               )}
              </div>
 
              {/* Risk Analysis Section */}

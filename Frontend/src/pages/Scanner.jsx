@@ -356,6 +356,7 @@ const Scanner = () => {
         const data = backendRes.data.data;
         const historyItem = {
           id: Date.now(),
+          code: barcodeToSend,
           productName: data.productName,
           ingredients: data.ingredients,
           image: data.image || data.imageUrl,
@@ -425,6 +426,7 @@ const Scanner = () => {
         const data = backendRes.data.data;
         const historyItem = {
           id: Date.now(),
+          code: barcodeToSend,
           productName: data.productName,
           ingredients: data.ingredients,
           image: data.image || data.imageUrl,
