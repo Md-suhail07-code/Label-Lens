@@ -33,6 +33,36 @@ const processImageScan = async (req, res) => {
   }
 };
 
+/**
+ * Search for a product by barcode as a fallback strategy
+ * Uses OpenFoodFacts search API instead of direct product lookup
+ */
+const searchProductByBarcode = async (barcode) => {
+  try {
+    const searchUrl = `https://world.openfoodfacts.org/cgi/search.pl`;
+    const response = await axios.get(searchUrl, {
+      params: {
+        search_terms: barcode,
+        search_simple: 1,
+        action: 'process',
+        json: 1,
+        fields: 'product_name,product_name_en,brands,ingredients_text,ingredients_text_en,image_url,image_front_url,image_front_small_url'
+      },
+      headers: OFF_HEADERS,
+      timeout: 10000 // 10 second timeout
+    });
+
+    if (response.data.products && response.data.products.length > 0) {
+      console.log(`✅ Found product via search API`);
+      return response.data.products[0];
+    }
+    return null;
+  } catch (err) {
+    console.error("⚠️ Search fallback failed:", err.message);
+    return null;
+  }
+};
+
 const processBarcodeSearch = async (req, res) => {
   try {
     // 1. DEBUGGING: Log exactly what the frontend sent
@@ -47,43 +77,114 @@ const processBarcodeSearch = async (req, res) => {
 
     // 2. Clean the barcode (remove spaces/dashes if any)
     const cleanBarcode = String(barcode).trim();
-    console.log(`🔹 Lookup OpenFoodFacts for: ${cleanBarcode}`);
+    console.log(`🔹 Looking up barcode: ${cleanBarcode}`);
 
-    // 3. Request data from Open Food Facts (use .net API – .org can timeout/fail for product lookup)
-    const offUrl = `https://world.openfoodfacts.net/api/v2/product/${cleanBarcode}`;
-    
-    const response = await axios.get(offUrl, { 
-      headers: OFF_HEADERS,
-      validateStatus: () => true // Prevent axios from throwing error on 404
-    });
-
-    // 4. Check if product exists
-    const data = response.data;
-    
-    if (response.status === 404 || data.status === 0 || !data.product) {
-      console.log("❌ Product not found in OFF database.");
-      return res.json({ success: false, message: "Product not found." });
+    // Validate barcode format (should be 8-13 digits)
+    if (!/^\d{8,13}$/.test(cleanBarcode)) {
+      console.log("❌ Invalid barcode format. Expected 8-13 digits.");
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid barcode format. Must be 8-13 digits." 
+      });
     }
 
-    const product = data.product;
+    // 3. Try multiple barcode format variations
+    // OpenFoodFacts can be finicky with barcode formats (EAN-13, UPC-A, etc.)
+    const barcodeVariations = [
+      cleanBarcode,                                          // Original (e.g., 89010630350271)
+      cleanBarcode.padStart(13, '0'),                       // Pad to 13 digits (if shorter)
+      cleanBarcode.length === 13 ? cleanBarcode.substring(1) : null, // Remove leading digit (9010630350271)
+      cleanBarcode.length === 12 ? '0' + cleanBarcode : null,        // Add leading 0 (for UPC-A to EAN-13)
+      cleanBarcode.length === 13 ? '0' + cleanBarcode : null         // Try with extra leading 0
+    ].filter(Boolean); // Remove null/undefined values
 
-    // 5. Extract NAME, INGREDIENTS, IMAGE URL from Open Food Facts only (no Gemini)
+    // Remove duplicates
+    const uniqueVariations = [...new Set(barcodeVariations)];
+
+    console.log(`🔹 Will try ${uniqueVariations.length} barcode variations:`, uniqueVariations);
+
+    let productData = null;
+    let successfulBarcode = null;
+
+    // 4. Try each barcode variation
+    for (const barcodeVariant of uniqueVariations) {
+      console.log(`   Trying: ${barcodeVariant}`);
+      
+      const offUrl = `https://world.openfoodfacts.org/api/v2/product/${barcodeVariant}.json`;
+      
+      try {
+        const response = await axios.get(offUrl, { 
+          headers: OFF_HEADERS,
+          timeout: 8000, // 8 second timeout
+          validateStatus: () => true // Don't throw on 404
+        });
+
+        const data = response.data;
+        
+        // Check if we got a valid product
+        // OFF returns status: 1 for found, status: 0 for not found
+        if (response.status === 200 && data.status === 1 && data.product) {
+          console.log(`✅ Product found with barcode: ${barcodeVariant}`);
+          productData = data;
+          successfulBarcode = barcodeVariant;
+          break; // Stop searching once we find a match
+        } else {
+          console.log(`   Not found (status: ${data.status})`);
+        }
+      } catch (err) {
+        console.log(`   Request failed: ${err.message}`);
+        continue; // Try next variation
+      }
+    }
+
+    // 5. If no variation worked, try search API as last resort
+    if (!productData) {
+      console.log("🔹 Direct lookup failed. Trying search API fallback...");
+      const searchResult = await searchProductByBarcode(cleanBarcode);
+      
+      if (searchResult) {
+        productData = { product: searchResult, status: 1 };
+        successfulBarcode = cleanBarcode;
+        console.log(`✅ Product found via search: ${searchResult.product_name || 'Unknown'}`);
+      }
+    }
+
+    // 6. If still nothing found, return error
+    if (!productData || !productData.product) {
+      console.log("❌ Product not found in OpenFoodFacts database.");
+      console.log("   Tried variations:", uniqueVariations);
+      return res.json({ 
+        success: false, 
+        message: "Product not found in OpenFoodFacts database. The barcode may not be registered yet, or try scanning again with better lighting.",
+        attemptedBarcodes: uniqueVariations
+      });
+    }
+
+    const product = productData.product;
+
+    // 7. Extract product information from OpenFoodFacts
     const resultData = {
       productName: product.product_name || product.product_name_en || "Unknown Product",
       imageUrl: product.image_url || product.image_front_url || product.image_front_small_url || null,
       ingredients: product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.",
-      // Placeholders for UI (not from OFF)
       brand: product.brands || "Unknown Brand",
+      // Placeholders (no AI analysis yet)
       riskScore: 0,
       verdict: "Info Only",
-      analysisSummary: "Product info from Open Food Facts.",
+      analysisSummary: "Product information from Open Food Facts. Detailed ingredient analysis coming soon.",
       flaggedIngredients: [],
       alternatives: []
     };
 
-    console.log("✅ Product found:", resultData.productName);
+    console.log("✅ Successfully processed product:", {
+      name: resultData.productName,
+      brand: resultData.brand,
+      barcodeUsed: successfulBarcode,
+      hasImage: !!resultData.imageUrl,
+      hasIngredients: resultData.ingredients !== "Ingredients list not available."
+    });
 
-    // 6. Optional: Save to DB (Remove this block if you don't want to save history yet)
+    // 8. Optional: Save scan to database
     if (req.user) {
       try {
         await new ScanHistory({
@@ -94,23 +195,33 @@ const processBarcodeSearch = async (req, res) => {
           riskScore: 0,
           verdict: "Safe",
           analysisSummary: resultData.ingredients,
-          flaggedIngredients: [], // Empty because no AI
+          flaggedIngredients: [],
           alternatives: []
         }).save();
+        console.log("✅ Scan saved to history");
       } catch (err) {
-        console.error("⚠️ Failed to save history:", err.message);
+        console.error("⚠️ Failed to save scan history:", err.message);
+        // Don't fail the request if history save fails
       }
     }
 
-    // 7. Send Response
+    // 9. Send successful response
     return res.json({
       success: true,
-      data: resultData
+      data: resultData,
+      meta: {
+        barcodeUsed: successfulBarcode,
+        originalBarcode: cleanBarcode
+      }
     });
 
   } catch (error) {
-    console.error("🔥 Controller Error:", error);
-    return res.status(500).json({ success: false, message: "Server error during lookup." });
+    console.error("🔥 Fatal error in processBarcodeSearch:", error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Server error during barcode lookup. Please try again.",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
