@@ -26,10 +26,10 @@ const BottomNav = () => {
       initial={{ y: 100 }}
       animate={{ y: 0 }}
       transition={{ type: "spring", stiffness: 300, damping: 30 }}
-      className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-4 pt-2"
+      className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-6 pt-2"
     >
-      <div className="mx-auto max-w-md rounded-2xl bg-white/70 backdrop-blur-md shadow-lg">
-        <div className="flex items-center justify-around py-2">
+      <div className="mx-auto max-w-md rounded-[28px] bg-white/80 backdrop-blur-xl shadow-[0_4px_24px_-4px_rgba(0,0,0,0.12)] border border-white/60">
+        <div className="flex items-center justify-around gap-1 p-2">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
@@ -38,18 +38,18 @@ const BottomNav = () => {
               <motion.button
                 key={item.path}
                 onClick={() => navigate(item.path)}
-                whileTap={{ scale: 0.9 }}
+                whileTap={{ scale: 0.92 }}
                 className={cn(
-                  "relative flex flex-col items-center gap-1 px-4 py-2 rounded-xl transition-colors",
+                  "relative flex flex-col items-center justify-center gap-1 min-w-[64px] py-2.5 rounded-[20px] transition-all duration-200",
                   isActive
-                    ? "core"
-                    : "text-gray-500 hover:text-gray-900"
+                    ? "text-primary"
+                    : "text-gray-500 hover:text-gray-700"
                 )}
               >
                 {isActive && (
                   <motion.div
                     layoutId="activeTab"
-                    className="absolute inset-0 rounded-xl bg-blue-600/10"
+                    className="absolute inset-0 rounded-[20px] bg-primary/12"
                     transition={{ type: "spring", stiffness: 400, damping: 30 }}
                   />
                 )}
@@ -57,10 +57,13 @@ const BottomNav = () => {
                 <Icon
                   className={cn(
                     "h-5 w-5 relative z-10",
-                    isActive && "core"
+                    isActive && "text-primary"
                   )}
                 />
-                <span className="text-xs font-medium relative z-10">
+                <span className={cn(
+                  "text-[11px] font-medium relative z-10",
+                  isActive ? "text-primary" : "text-gray-500"
+                )}>
                   {item.label}
                 </span>
               </motion.button>

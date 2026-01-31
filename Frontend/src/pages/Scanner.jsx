@@ -28,6 +28,7 @@ const Scanner = () => {
   const barcodeScanReqRef = useRef(null);
   const barcodeLastScanTimeRef = useRef(0);
   const audioContextRef = useRef(null);
+  const audioUnlockedRef = useRef(false);
   const DETECTION_INTERVAL_MS = 380; // Throttle so WASM can finish on slower devices (e.g. iPhone)
 
   const initialMode = location.state?.mode || "barcode";
@@ -40,34 +41,44 @@ const Scanner = () => {
   const [barcodeFromUpload, setBarcodeFromUpload] = useState(null);
   const [isDetectingBarcodeFromUpload, setIsDetectingBarcodeFromUpload] = useState(false);
 
-  // 🔊 Play beep + vibrate on successful scan (uses pre-resumed AudioContext from camera start)
-  const onScanSuccess = () => {
+  // 🔊 Unlock audio on first user interaction (required for iOS)
+  const unlockAudio = () => {
+    if (audioUnlockedRef.current) return;
+    audioUnlockedRef.current = true;
     try {
-      let ctx = audioContextRef.current;
-      if (!ctx) {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        audioContextRef.current = ctx;
-      }
-      if (ctx.state === "suspended") ctx.resume();
-      const oscillator = ctx.createOscillator();
-      const gainNode = ctx.createGain();
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      oscillator.type = "sine";
-      oscillator.frequency.setValueAtTime(800, ctx.currentTime);
-      gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.15);
-    } catch {
-      // Fallback: try HTML5 Audio with inline base64 beep
-      try {
-        const beep = new Audio("data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YUtvT19XQVZFZm10IA==");
-        beep.volume = 0.5;
-        beep.play().catch(() => {});
-      } catch {}
-    }
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = ctx;
+      ctx.resume().then(() => {
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(0, ctx.currentTime);
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscillator.start(ctx.currentTime);
+        oscillator.stop(ctx.currentTime + 0.01);
+      }).catch(() => {});
+    } catch { /* ignore */ }
+  };
+
+  // 🔊 Play beep + vibrate on successful scan
+  const onScanSuccess = () => {
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+    try {
+      const ctx = audioContextRef.current;
+      if (ctx && ctx.state !== "closed") {
+        if (ctx.state === "suspended") ctx.resume();
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(800, ctx.currentTime);
+        gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+        oscillator.start(ctx.currentTime);
+        oscillator.stop(ctx.currentTime + 0.15);
+      }
+    } catch { /* Audio not supported */ }
   };
 
   // 🎥 START CAMERA
@@ -94,12 +105,7 @@ const Scanner = () => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
       streamRef.current = stream;
-      // Pre-resume AudioContext while we have user gesture (camera permission = user interaction)
-      try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        audioContextRef.current = ctx;
-        if (ctx.state === "suspended") await ctx.resume();
-      } catch {}
+      unlockAudio();
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         // iOS requires 'playsInline' in the video tag (already added below)
@@ -117,12 +123,13 @@ const Scanner = () => {
             audio: false
         });
         streamRef.current = stream;
+        unlockAudio();
         if (videoRef.current) {
             videoRef.current.srcObject = stream;
             await videoRef.current.play();
             setCameraActive(true);
         }
-      } catch (retryErr) {
+      } catch {
         alert("Camera permission denied or not supported.");
         setCameraActive(false);
       }
@@ -256,6 +263,24 @@ const Scanner = () => {
     return () => {
       stopCamera();
       stopBarcodeScan();
+    };
+  }, []);
+
+  // Unlock audio on first user interaction (touch/click) - required for iOS
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudio();
+      ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
+        document.body.removeEventListener(e, unlock)
+      );
+    };
+    ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
+      document.body.addEventListener(e, unlock, { once: true, passive: true })
+    );
+    return () => {
+      ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
+        document.body.removeEventListener(e, unlock)
+      );
     };
   }, []);
 

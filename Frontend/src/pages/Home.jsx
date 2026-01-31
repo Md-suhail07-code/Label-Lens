@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Camera, Barcode, PenLine, Sparkles, ChevronRight } from 'lucide-react';
+import { Camera, Barcode, Sparkles, ChevronRight } from 'lucide-react';
 import { useUserProfile } from '@/context/UserProfileContext';
 import { useScanHistory } from '@/context/ScanHistoryContext';
 import QuickActionCard from '@/components/home/QuickActionCard';
@@ -104,14 +104,6 @@ const Home = () => {
             onClick={() => navigate('/scanner', { state: { mode: 'barcode' } })}
             gradient="gradient-caution"
             delay={0.2}
-          />
-          <QuickActionCard
-            icon={PenLine}
-            title="Manual Entry"
-            description="Type product name or paste ingredients"
-            onClick={() => navigate('/manual-entry')}
-            gradient="gradient-safe"
-            delay={0.3}
           />
         </div>
       </div>
