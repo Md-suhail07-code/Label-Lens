@@ -147,28 +147,36 @@ const processImageScan = async (req, res) => {
   }
 };
 
+// OpenFoodFacts requires a User-Agent; without it requests can be blocked or return errors
+const OFF_HEADERS = {
+  "User-Agent": "LabelLens/1.0 - Food ingredient scanner (https://github.com/label-lens)",
+};
+
 // ---------- BARCODE LOOKUP (OpenFoodFacts only; Gemini commented out for future use) ----------
 const processBarcodeSearch = async (req, res) => {
   try {
-    const { barcode } = req.body;
+    const rawBarcode = req.body.barcode;
+    const barcode = rawBarcode != null ? String(rawBarcode).trim() : "";
 
     if (!barcode) {
       return res.status(400).json({ error: "No barcode provided" });
     }
 
-    // 1️⃣ Fetch from OpenFoodFacts API
+    // 1️⃣ Fetch from OpenFoodFacts API (User-Agent required by OFF)
     const offResponse = await axios.get(
-      `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`
+      `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`,
+      { headers: OFF_HEADERS }
     );
 
-    if (offResponse.data.status !== 1 || !offResponse.data.product) {
+    const data = offResponse.data;
+    if (data.status !== 1 || !data.product) {
       return res.json({
         success: false,
         message: "Product not found in OpenFoodFacts database."
       });
     }
 
-    const product = offResponse.data.product;
+    const product = data.product;
     const productName = product.product_name || "Unknown Product";
     const imageUrl = product.image_url || product.image_front_url || "";
     const ingredients = product.ingredients_text || "";
