@@ -60,7 +60,7 @@ function ScoreRing({ score, max = 100, theme = 'unsafe' }) {
 }
 
 // --- COMPONENT: HEADER ---
-function ProductHeader({ status, productName, productImage, riskScore, onBack }) {
+function ProductHeader({ status, productName, productImage, riskScore, onBack, onShare }) {
   // Determine gradient based on status
   const bgGradient = status === 'safe' 
     ? 'linear-gradient(180deg, #34C759 0%, #30D158 100%)' // Green for Safe
@@ -92,7 +92,10 @@ function ProductHeader({ status, productName, productImage, riskScore, onBack })
         >
           <ChevronLeft className="text-white w-6 h-6" />
         </button>
-        <button className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center hover:bg-white/30 transition-colors cursor-pointer">
+        <button 
+          onClick={onShare}
+          className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center hover:bg-white/30 transition-colors cursor-pointer"
+        >
           <Share2 className="text-white w-5 h-5" />
         </button>
       </div>
@@ -386,6 +389,38 @@ const ResultsPage = () => {
   const status = isSafe ? "safe" : isModerate ? "moderate" : "unsafe";
   const riskScore = typeof result.score === "number" ? result.score : (typeof result.riskScore === "number" ? result.riskScore : (isSafe ? 10 : 90));
 
+  const statusLabel = status === "safe" ? "SAFE" : status === "moderate" ? "CAUTION" : "AVOID";
+
+  const handleShare = async () => {
+    const shareText = `${productName} – ${statusLabel} (Label Lens)\n\nScanned with Label Lens. Risk score: ${riskScore}/100`;
+    const shareData = {
+      title: productName,
+      text: shareText,
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          try {
+            await navigator.clipboard.writeText(shareText);
+            alert("Copied to clipboard!");
+          } catch {
+            alert("Sharing failed. Try copying manually.");
+          }
+        }
+      }
+    } else {
+      try {
+        await navigator.clipboard.writeText(shareText);
+        alert("Copied to clipboard!");
+      } catch {
+        alert("Sharing not supported. Try copying manually.");
+      }
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center font-sans">
       <div className="w-full max-w-md bg-white min-h-screen shadow-2xl overflow-hidden flex flex-col">
@@ -397,6 +432,7 @@ const ResultsPage = () => {
           productImage={productImage}
           riskScore={riskScore}
           onBack={() => navigate(-1)}
+          onShare={handleShare}
         />
 
         <div className="flex flex-col gap-6 mt-6 pb-4 relative z-10 w-full px-6">
