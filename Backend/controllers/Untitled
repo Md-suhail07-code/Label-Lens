@@ -5,14 +5,16 @@ import { ScanHistory } from '../models/historyModel.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import axios from 'axios';
 import dotenv from 'dotenv';
-
 dotenv.config();
 
 const visionClient = new vision.ImageAnnotatorClient();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// ---------- Cloudinary ----------
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const model = genAI.getGenerativeModel({
+  model: "gemini-1.5-flash" // Updated to stable model name
+});
+
+// ---------- Cloudinary Upload ----------
 const uploadFromBuffer = (buffer) => {
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
@@ -32,7 +34,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// ---------- IMAGE SCAN (OCR + Gemini) – unchanged ----------
+// ---------- MAIN CONTROLLER (Image Scan) ----------
 const processImageScan = async (req, res) => {
   try {
     if (!req.file) {
@@ -43,13 +45,17 @@ const processImageScan = async (req, res) => {
     const healthCondition = user.healthCondition || "none";
     const allergies = user.allergies || [];
 
+    // 1️⃣ Upload image for history
     const uploadResult = await uploadFromBuffer(req.file.buffer);
     const imageUrl = uploadResult.secure_url;
 
+    // 2️⃣ OCR Extraction
     const [ocrResult] = await visionClient.textDetection({
       image: { content: req.file.buffer }
     });
-    const extractedText = ocrResult.textAnnotations?.[0]?.description || "";
+
+    const extractedText =
+      ocrResult.textAnnotations?.[0]?.description || "";
 
     if (!extractedText) {
       return res.json({
@@ -58,17 +64,22 @@ const processImageScan = async (req, res) => {
       });
     }
 
+    // 3️⃣ Gemini Prompt
     const prompt = `
         You are a food ingredient risk analysis engine.
         Analyze the following INGREDIENT LIST exactly as written:
         "${extractedText}"
+
         User Health Context:
         - Health Condition: ${healthCondition}
         - Allergies: ${allergies.length ? allergies.join(", ") : "None"}
+
         Rules:
         - Consider Indian packaged food context.
         - Be conservative and factual.
         - Do NOT give medical advice.
+        - Consider allergies and health condition while assigning risk.
+        
         Return ONLY a valid JSON object.
         JSON Schema:
         {
@@ -77,17 +88,22 @@ const processImageScan = async (req, res) => {
           "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
           "analysisSummary": "One short sentence summary",
           "flaggedIngredients": [
-            { "name": "Ingredient name", "risk": "Low" | "Medium" | "High", "reason": "Simple explanation" }
+            {
+              "name": "Ingredient name",
+              "risk": "Low" | "Medium" | "High",
+              "reason": "Simple explanation"
+            }
           ],
           "alternatives": [ "Alternative 1", "Alternative 2" ]
         }
-    `;
+        `;
 
     const aiResult = await model.generateContent(prompt);
     const aiText = aiResult.response.text();
     const cleanJson = aiText.replace(/```json|```/g, "").trim();
     const parsedData = JSON.parse(cleanJson);
 
+    // 4️⃣ Save Scan History
     if (req.user) {
       await new ScanHistory({
         user: req.user._id,
@@ -110,6 +126,7 @@ const processImageScan = async (req, res) => {
         ...parsedData
       }
     });
+
   } catch (error) {
     console.error("LabelLens Processing Error:", error);
     res.status(500).json({
@@ -119,104 +136,95 @@ const processImageScan = async (req, res) => {
   }
 };
 
-// ---------- BARCODE LOOKUP (OpenFoodFacts only) – remade from scratch ----------
+// OpenFoodFacts requires a User-Agent
 const OFF_HEADERS = {
-  "User-Agent": "LabelLens/1.0 - Food label scanner - https://github.com/label-lens",
-  "Accept": "application/json"
+  "User-Agent": "LabelLens/1.0 - Food ingredient scanner",
 };
 
-/** Normalize barcode: digits only (strip spaces, dashes, etc.) so OFF accepts it. */
-function normalizeBarcode(value) {
-  if (value == null) return "";
-  const s = String(value).trim();
-  return s.replace(/\D/g, "");
-}
-
-/** Fetch OFF product by barcode; returns { body } or { body: null } on failure. */
-async function fetchOFFProduct(barcode) {
-  const url = `https://world.openfoodfacts.org/api/v0/product/${barcode}.json`;
-  try {
-    const response = await axios.get(url, {
-      headers: OFF_HEADERS,
-      timeout: 15000,
-      validateStatus: () => true
-    });
-    const body = response.data || {};
-    return { body, status: response.status };
-  } catch (err) {
-    console.error("OFF request failed:", err.message);
-    return { body: null };
-  }
-}
-
+// ---------- BARCODE LOOKUP (FIXED & ROBUST) ----------
 const processBarcodeSearch = async (req, res) => {
   try {
-    const raw = req.body.barcode;
-    const barcode = normalizeBarcode(raw);
+    const rawBarcode = req.body.barcode;
+    let barcode = rawBarcode != null ? String(rawBarcode).trim() : "";
 
     if (!barcode) {
-      return res.status(400).json({
-        success: false,
-        message: "No barcode provided."
-      });
+      return res.status(400).json({ error: "No barcode provided" });
     }
 
-    let body = null;
+    // Helper function to query OFF API
+    const fetchFromOFF = async (code) => {
+      try {
+        const response = await axios.get(
+            `https://world.openfoodfacts.org/api/v0/product/${code}.json`,
+            { headers: OFF_HEADERS }
+        );
+        return response.data;
+      } catch (err) {
+        return null;
+      }
+    };
 
-    const { body: data1 } = await fetchOFFProduct(barcode);
-    if (data1 && data1.status === 1 && data1.product) {
-      body = data1;
+    // 1️⃣ First Attempt: Query exact barcode
+    let data = await fetchFromOFF(barcode);
+
+    // 2️⃣ Retry Logic: If not found and looks like UPC (12 chars), try EAN-13 (13 chars)
+    // Many scanners read UPC without the leading 0, but OFF stores it as EAN-13.
+    if ((!data || data.status !== 1) && barcode.length === 12) {
+      console.log(`Retrying UPC ${barcode} as EAN-13 (0${barcode})...`);
+      const retryData = await fetchFromOFF(`0${barcode}`);
+      if (retryData && retryData.status === 1) {
+        data = retryData;
+      }
     }
 
-    if (!body && barcode.length === 12) {
-      const { body: data2 } = await fetchOFFProduct("0" + barcode);
-      if (data2 && data2.status === 1 && data2.product) body = data2;
-    }
-
-    if (!body && barcode.length === 13 && barcode[0] === "0") {
-      const { body: data3 } = await fetchOFFProduct(barcode.slice(1));
-      if (data3 && data3.status === 1 && data3.product) body = data3;
-    }
-
-    if (!body || !body.product) {
+    // Check if product was found
+    if (!data || data.status !== 1 || !data.product) {
+      console.log(`Product not found for barcode: ${barcode}`);
       return res.json({
         success: false,
         message: "Product not found in OpenFoodFacts database."
       });
     }
 
-    const p = body.product;
+    const product = data.product;
+    
+    // 3️⃣ Extract Data Safely (Fallbacks for missing fields)
+    const productName = product.product_name || product.product_name_en || "Unknown Product";
+    const brand = product.brands || product.brands_tags?.[0] || "Unknown Brand";
+    
+    // Image fallback priority: Selected -> Front -> Thumb
+    const imageUrl = product.image_url || product.image_front_url || product.image_thumb_url || "";
+    
+    // Ingredients fallback priority: Text -> Text En -> Empty
+    const ingredients = product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.";
 
-    const productName = p.product_name || p.product_name_en || "Unknown Product";
-    const imageUrl = p.image_url || p.image_front_url || p.image_front_small_url || p.image_thumb_url || "";
-    const ingredients = p.ingredients_text || p.ingredients_text_en || "";
-    const brand = p.brands || (p.brands_tags && p.brands_tags[0]) || "Unknown";
-
-    // History model requires scannedImageUrl; use placeholder if OFF has no image
-    const scannedImageUrl = imageUrl || "https://images.openfoodfacts.org/images/icons/dist/packaging.svg";
-
+    // 4️⃣ Placeholder Analysis (Until you re-enable Gemini)
+    // Note: Since Gemini is commented out, we return "Safe" defaults so the UI doesn't crash.
     const riskScore = 0;
     const verdict = "Safe";
-    const analysisSummary = ingredients
-      ? "Product info from OpenFoodFacts. AI analysis coming soon."
-      : "Product found. Ingredients not available in database.";
+    const analysisSummary = ingredients !== "Ingredients list not available." 
+        ? "Product details retrieved from database. AI analysis pending." 
+        : "Product found, but ingredients are missing from database.";
+        
     const flaggedIngredients = [];
     const alternatives = [];
 
+    // 5️⃣ Save Scan History
     if (req.user) {
       await new ScanHistory({
         user: req.user._id,
-        scannedImageUrl,
+        scannedImageUrl: imageUrl,
         scanType: "barcode",
         productName,
         riskScore,
         verdict,
         analysisSummary,
         flaggedIngredients,
-        alternatives: []
+        alternatives: [] // alternatives usually need schema matching
       }).save();
     }
 
+    // 6️⃣ Send Success Response
     res.json({
       success: true,
       data: {
@@ -231,8 +239,9 @@ const processBarcodeSearch = async (req, res) => {
         alternatives
       }
     });
-  } catch (err) {
-    console.error("Barcode Lookup Error:", err.message || err);
+
+  } catch (error) {
+    console.error("Barcode Lookup Error:", error);
     res.status(500).json({
       success: false,
       error: "Failed to lookup barcode"

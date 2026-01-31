@@ -2,3 +2,38 @@
 .env
 service-account-key.json
 node_modules/
+Backend/node_modules
+Backend/service-account-key.json
+Frontend/node_modules
+# dependencies
+node_modules/
+
+# lockfiles (optional — usually keep ONE lockfile)
+node_modules/.package-lock.json
+
+# environment variables
+.env
+.env.*
+
+# logs
+logs
+*.log
+
+# OS files
+.DS_Store
+
+# build folders
+dist/
+build/
+out/
+
+# frontend build outputs (if React/Vite/etc)
+Frontend/dist/
+Frontend/build/
+
+# coverage
+coverage/
+
+# temp files
+tmp/
+temp/

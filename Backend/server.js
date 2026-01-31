@@ -12,8 +12,14 @@ const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
 app.use(cors({
-    origin: "https://label-lens-wenv.onrender.com",
+    origin: [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://label-lens-wenv.onrender.com"
+    ],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
 app.use("/api/users", userRoute);

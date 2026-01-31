@@ -293,7 +293,7 @@ const Scanner = () => {
     setIsAnalyzing(true);
     try {
       const backendRes = await axios.post('/api/ocr/barcode-lookup', 
-        { barcode: detectedBarcode },
+        { barcode: String(detectedBarcode) },
         {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
@@ -363,7 +363,8 @@ const Scanner = () => {
         setIsAnalyzing(false);
         return;
       }
-      const backendRes = await axios.post('/api/ocr/barcode-lookup', { barcode }, {
+      const barcodeToSend = String(barcode).replace(/\D/g, "").trim() || barcode;
+      const backendRes = await axios.post('/api/ocr/barcode-lookup', { barcode: barcodeToSend }, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
           'Content-Type': 'application/json'
