@@ -12,12 +12,8 @@ dotenv.config();
 // ==========================================
 
 const visionClient = new vision.ImageAnnotatorClient();
-
-// using standard stable model
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash" 
-});
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 const OFF_HEADERS = {
   "User-Agent": "LabelLens/1.0 (Educational Project)",
@@ -34,87 +30,10 @@ cloudinary.config({
 // HELPER FUNCTIONS
 // ==========================================
 
-// --- Cloudinary Upload Helper ---
-const uploadFromBuffer = (buffer) => {
-  return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder: "label-lens-scans" },
-      (error, result) => {
-        if (result) resolve(result);
-        else reject(error);
-      }
-    );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
-  });
-};
-
-// --- OpenFoodFacts Fetchers (For Barcode Search) ---
-async function fetchOffProduct(code, base = 'org') {
-  const host = base === 'net' ? 'world.openfoodfacts.net' : 'world.openfoodfacts.org';
-  const url = `https://${host}/api/v0/product/${code}.json`;
-  try {
-    const res = await axios.get(url, { headers: OFF_HEADERS, timeout: 5000, validateStatus: () => true });
-    const data = res.data;
-    if (res.status === 200 && data && typeof data === 'object' && data.status === 1 && data.product) return data.product;
-  } catch (e) { console.log(`   OFF ${base} failed:`, e.message); }
-  return null;
-}
-
-async function fetchOffProductV2(code) {
-  try {
-    const url = `https://world.openfoodfacts.net/api/v2/product/${code}`;
-    const res = await axios.get(url, { headers: OFF_HEADERS, timeout: 5000, validateStatus: () => true });
-    const data = res.data;
-    if (res.status === 200 && data && typeof data === 'object' && data.status === 1 && data.product) return data.product;
-  } catch (e) { console.log('   OFF v2 .net failed:', e.message); }
-  return null;
-}
-
-async function searchOffByCode(code) {
-  try {
-    const res = await axios.get('https://world.openfoodfacts.org/cgi/search.pl', {
-      params: {
-        search_terms: code, search_simple: 1, action: 'process', json: 1,
-        fields: 'code,product_name,product_name_en,brands,ingredients_text,ingredients_text_en,image_url,image_front_url,nutriscore_grade'
-      },
-      headers: OFF_HEADERS, timeout: 5000, validateStatus: () => true
-    });
-    return res.data?.products?.find(p => String(p.code || '') === String(code)) || res.data?.products?.[0] || null;
-  } catch (e) { console.log('   Search API failed:', e.message); }
-  return null;
-}
-
-// --- Helper: Fetch Image for Alternatives (Used by both flows) ---
-async function fetchProductImage(productName) {
-  try {
-    const url = `https://world.openfoodfacts.org/cgi/search.pl`;
-    const res = await axios.get(url, {
-      params: {
-        search_terms: productName,
-        search_simple: 1,
-        action: 'process',
-        json: 1,
-        page_size: 1,
-        fields: 'image_front_small_url,image_front_url,product_name'
-      },
-      timeout: 3000
-    });
-    const products = res.data?.products || [];
-    if (products.length > 0) {
-      return products[0].image_front_small_url || products[0].image_front_url || null;
-    }
-  } catch (error) {
-    // console.log(`   [OFF Search Failed for ${productName}]`);
-  }
-  return null;
-}
-
 // --- Helper: Clean JSON Parsing ---
 function parseGeminiJson(text) {
   try {
-    // Remove markdown code blocks
     let clean = text.replace(/```json|```/g, "").trim();
-    // Find the first '{' and last '}' to handle any extra intro/outro text
     const firstBrace = clean.indexOf('{');
     const lastBrace = clean.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1) {
@@ -122,67 +41,100 @@ function parseGeminiJson(text) {
     }
     return JSON.parse(clean);
   } catch (e) {
-    console.error("   ❌ JSON Parse Error:", e.message);
+    console.error("❌ JSON Parse Error:", e.message);
     return null;
   }
 }
 
-// --- Helper: Generate Alternatives for Barcode Flow ---
-async function generateAlternativesWithGemini(productName, ingredientsText, user) {
+// --- Helper: Fetch Image for Alternatives ---
+// specific search to find a product image by name
+async function fetchProductImage(productName) {
+  try {
+    // We search OFF for the product name to get an image
+    const url = `https://world.openfoodfacts.org/cgi/search.pl`;
+    const res = await axios.get(url, {
+      params: {
+        search_terms: productName,
+        search_simple: 1,
+        action: 'process',
+        json: 1,
+        page_size: 1, // We only need the top result
+        fields: 'image_front_small_url,image_front_url,product_name,brands'
+      },
+      headers: OFF_HEADERS,
+      timeout: 3000
+    });
+    
+    const products = res.data?.products || [];
+    if (products.length > 0) {
+      return products[0].image_front_small_url || products[0].image_front_url || null;
+    }
+  } catch (error) {
+    console.log(`   [OFF Image Fetch Failed for ${productName}]`);
+  }
+  return null;
+}
+
+// --- Helper: Full Gemini Analysis (Risk + Alternatives) ---
+async function analyzeWithGemini(productName, ingredientsText, user) {
   try {
     const healthCondition = user?.healthCondition || "none";
     const allergies = user?.allergies || [];
 
     const prompt = `
-      Product: "${productName}"
+      Analyze Product: "${productName}"
       Ingredients: "${ingredientsText}"
-      User Context: Health Condition: ${healthCondition}, Allergies: ${allergies.join(", ")}
+      User Context: Health: ${healthCondition}, Allergies: ${allergies.join(", ")}
 
-      TASK: Suggest exactly 3 "Cleaner/Healthier" alternative products available in the INDIAN MARKET.
-      They must be specific brand names (e.g. "Tata Soulfull", "Yoga Bar", "Slurrp Farm").
-      Return ONLY valid JSON.
-      { "alternatives": ["Brand Name 1", "Brand Name 2", "Brand Name 3"] }
+      TASK:
+      1. Analyze the ingredients for health risks (Indian context).
+      2. Assign a Risk Score (0-100, where 100 is most dangerous).
+      3. Suggest exactly 3 "Cleaner/Healthier" alternative products available in the INDIAN MARKET.
+         - Alternatives MUST be real, specific brand names (e.g. "Tata Soulfull Ragi Bites", "Yoga Bar Muesli").
+
+      Return VALID JSON ONLY:
+      {
+        "riskScore": Number,
+        "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
+        "analysisSummary": "Short, punchy summary of why it is safe or unsafe.",
+        "flaggedIngredients": [ { "name": "Ingredient Name", "reason": "Short reason why" } ],
+        "alternatives": ["Brand Name 1", "Brand Name 2", "Brand Name 3"]
+      }
     `;
 
     const aiResult = await model.generateContent(prompt);
-    const aiText = aiResult.response.text();
-    const parsed = parseGeminiJson(aiText);
+    const parsed = parseGeminiJson(aiResult.response.text());
+    
+    // Default fallback if AI fails
+    if (!parsed) return {
+      riskScore: 50,
+      verdict: "Unknown",
+      analysisSummary: "Could not analyze ingredients.",
+      flaggedIngredients: [],
+      alternatives: []
+    };
 
-    if (parsed && parsed.alternatives && Array.isArray(parsed.alternatives)) {
-      // Enrich with images
-      const enriched = await Promise.all(parsed.alternatives.map(async (altName) => {
-         const img = await fetchProductImage(altName);
-         return { name: altName, image: img, productName: altName };
-      }));
-      return enriched;
-    }
-    return [];
+    return parsed;
+
   } catch (error) {
-    console.error("   ⚠️ Gemini Alternatives Failed:", error.message);
-    return [];
+    console.error("⚠️ Gemini Analysis Failed:", error.message);
+    return null;
   }
 }
 
-// --- Data Builder for Barcode Results ---
-function buildResultData(product) {
-  const nutriScore = (product.nutriscore_grade || 'unknown').toLowerCase();
-  let derivedVerdict = 'moderate';
-  let derivedScore = 50;
-  if (['a', 'b'].includes(nutriScore)) { derivedVerdict = 'safe'; derivedScore = 15; }
-  else if (['c', 'd'].includes(nutriScore)) { derivedVerdict = 'moderate'; derivedScore = 55; }
-  else if (nutriScore === 'e') { derivedVerdict = 'unsafe'; derivedScore = 85; }
-
-  return {
-    productName: product.product_name || product.product_name_en || "Unknown Product",
-    brand: product.brands || "Unknown Brand",
-    image: product.image_front_url || product.image_url || null,
-    ingredients: product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.",
-    riskScore: derivedScore,
-    verdict: derivedVerdict,
-    analysisSummary: `NutriScore: ${nutriScore.toUpperCase()}.`,
-    flaggedIngredients: derivedVerdict === 'unsafe' ? [{ name: "High Risk Additives", reason: "Low NutriScore (E)." }] : [],
-    alternatives: [] 
-  };
+// --- OpenFoodFacts Fetchers ---
+async function fetchOffProduct(code) {
+  // Try .org first, then .net as fallback
+  const domains = ['world.openfoodfacts.org', 'world.openfoodfacts.net'];
+  
+  for (const domain of domains) {
+    try {
+      const url = `https://${domain}/api/v2/product/${code}`;
+      const res = await axios.get(url, { headers: OFF_HEADERS, timeout: 5000 });
+      if (res.data?.product) return res.data.product;
+    } catch (e) { continue; }
+  }
+  return null;
 }
 
 // ==========================================
@@ -195,110 +147,140 @@ const processBarcodeSearch = async (req, res) => {
     const rawBarcode = req.body?.barcode;
     if (!rawBarcode) return res.status(400).json({ success: false, message: "No barcode provided." });
     
-    const barcode = String(rawBarcode).trim();
-    console.log(`🔹 Processing Barcode: ${barcode}`);
+    console.log(`🔹 Processing Barcode: ${rawBarcode}`);
 
-    // Try multiple endpoints to find the product
-    let product = await fetchOffProduct(barcode, 'org');
-    if (!product) product = await fetchOffProduct(barcode, 'net');
-    if (!product) product = await fetchOffProductV2(barcode);
-    if (!product) product = await searchOffByCode(barcode);
+    // 1. GET PRODUCT FROM OFF
+    const product = await fetchOffProduct(rawBarcode);
 
-    if (product) {
-      console.log('✅ Found Product in OFF');
-      const resultData = buildResultData(product);
-
-      // --- NEW: GEMINI ALTERNATIVES ---
-      console.log('✨ Generating Alternatives via Gemini...');
-      const user = req.user || {};
-      const aiAlts = await generateAlternativesWithGemini(resultData.productName, resultData.ingredients, user);
-      
-      if (aiAlts.length > 0) {
-        console.log(`✅ ${aiAlts.length} Alternatives Found`);
-        resultData.alternatives = aiAlts;
-      } else {
-        console.log('⚠️ No Alternatives generated');
-      }
-
-      return res.json({ success: true, data: resultData });
+    if (!product) {
+      return res.json({ success: false, message: "Product not found." });
     }
 
-    return res.json({ success: false, message: "Product not found." });
+    console.log('✅ Found Product in OFF:', product.product_name);
+
+    // 2. PREPARE DATA FOR GEMINI
+    const productName = product.product_name || product.product_name_en || "Unknown Product";
+    const ingredients = product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.";
+    const productImage = product.image_front_url || product.image_url || null;
+    const brand = product.brands || "Unknown Brand";
+
+    // 3. GET GEMINI ANALYSIS & ALTERNATIVES
+    console.log('✨ Analyzing with Gemini...');
+    const user = req.user || {};
+    const analysis = await analyzeWithGemini(productName, ingredients, user);
+
+    if (!analysis) {
+       // Fallback if Gemini fails entirely
+       return res.json({ 
+         success: true, 
+         data: { 
+           productName, brand, image: productImage, ingredients, 
+           riskScore: 50, verdict: "Moderate", alternatives: [] 
+         } 
+       });
+    }
+
+    // 4. ENRICH ALTERNATIVES WITH IMAGES (The key step you asked for)
+    let enrichedAlternatives = [];
+    if (analysis.alternatives && Array.isArray(analysis.alternatives)) {
+      console.log(`🔎 Fetching images for ${analysis.alternatives.length} alternatives...`);
+      
+      enrichedAlternatives = await Promise.all(
+        analysis.alternatives.map(async (altName) => {
+          const imgUrl = await fetchProductImage(altName);
+          return {
+            name: altName,
+            image: imgUrl, // This image comes from a fresh OFF query
+            brand: "Suggested Alternative"
+          };
+        })
+      );
+    }
+
+    // 5. CONSTRUCT FINAL RESPONSE
+    const resultData = {
+      productName,
+      brand,
+      image: productImage,
+      ingredients,
+      riskScore: analysis.riskScore,
+      verdict: analysis.verdict,
+      analysisSummary: analysis.analysisSummary,
+      flaggedIngredients: analysis.flaggedIngredients || [],
+      alternatives: enrichedAlternatives // Fully populated with images
+    };
+
+    // Optional: Save to history here if you want barcode scans in history too
+
+    return res.json({ success: true, data: resultData });
+
   } catch (error) {
     console.error("🔥 Server Error:", error.message);
     return res.status(500).json({ success: false, message: "Server error." });
   }
 };
 
-// 2. PROCESS IMAGE SCAN
+// 2. PROCESS IMAGE SCAN (OCR)
 const processImageScan = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No image provided" });
 
-    const user = req.user || {};
-    const healthCondition = user.healthCondition || "none";
-    const allergies = user.allergies || [];
+    // 1. Upload & OCR
+    const uploadFromBuffer = (buffer) => {
+      return new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          { folder: "label-lens-scans" },
+          (error, result) => (result ? resolve(result) : reject(error))
+        );
+        streamifier.createReadStream(buffer).pipe(uploadStream);
+      });
+    };
 
-    // 1️⃣ Upload image
     const uploadResult = await uploadFromBuffer(req.file.buffer);
-    const imageUrl = uploadResult.secure_url;
-
-    // 2️⃣ OCR
     const [ocrResult] = await visionClient.textDetection({ image: { content: req.file.buffer } });
     const extractedText = ocrResult.textAnnotations?.[0]?.description || "";
 
     if (!extractedText) return res.json({ success: false, message: "No text found." });
 
-    // 3️⃣ Gemini Analysis
-    const prompt = `
-        Analyze INGREDIENTS: "${extractedText}"
-        User Context: Health: ${healthCondition}, Allergies: ${allergies.join(", ")}
-        
-        Rules: Indian context. Conservative.
-        Provide exactly 3 "Cleaner alternative" suggestions (Specific Indian Brand Products).
-        
-        Return JSON ONLY:
-        {
-          "productName": "Estimated Name",
-          "riskScore": 0-100,
-          "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
-          "analysisSummary": "Short summary",
-          "flaggedIngredients": [ { "name": "Ing", "risk": "High", "reason": "Why" } ],
-          "alternatives": [ "Brand Product 1", "Brand Product 2", "Brand Product 3" ]
-        }
-    `;
-
-    const aiResult = await model.generateContent(prompt);
-    const parsedData = parseGeminiJson(aiResult.response.text());
-
-    if (!parsedData) throw new Error("Failed to parse AI response");
-
-    // 4️⃣ Enrich Alternatives with Images
-    if (parsedData.alternatives && Array.isArray(parsedData.alternatives)) {
-        parsedData.alternatives = await Promise.all(
-            parsedData.alternatives.map(async (altName) => {
-                const img = await fetchProductImage(altName);
-                return { name: altName, image: img, productName: altName };
-            })
-        );
+    // 2. Gemini Analysis
+    const user = req.user || {};
+    const analysis = await analyzeWithGemini("Scanned Label", extractedText, user);
+    
+    // 3. Enrich Alternatives
+    let enrichedAlternatives = [];
+    if (analysis && analysis.alternatives) {
+      enrichedAlternatives = await Promise.all(
+        analysis.alternatives.map(async (altName) => {
+          const imgUrl = await fetchProductImage(altName);
+          return { name: altName, image: imgUrl, brand: "Suggested" };
+        })
+      );
     }
 
-    // 5️⃣ Save History
+    const finalData = {
+       imageUrl: uploadResult.secure_url,
+       extractedText,
+       productName: "Scanned Label",
+       ...analysis,
+       alternatives: enrichedAlternatives
+    };
+
+    // 4. Save History
     if (req.user) {
       await new ScanHistory({
         user: req.user._id,
-        scannedImageUrl: imageUrl,
+        scannedImageUrl: finalData.imageUrl,
         scanType: "image_ocr",
-        productName: parsedData.productName,
-        riskScore: parsedData.riskScore,
-        verdict: parsedData.verdict,
-        analysisSummary: parsedData.analysisSummary,
-        flaggedIngredients: parsedData.flaggedIngredients,
-        alternatives: parsedData.alternatives 
+        productName: finalData.productName,
+        riskScore: finalData.riskScore,
+        verdict: finalData.verdict,
+        analysisSummary: finalData.analysisSummary,
+        flaggedIngredients: finalData.flaggedIngredients,
+        alternatives: finalData.alternatives 
       }).save();
     }
 
-    res.json({ success: true, data: { imageUrl, extractedText, ...parsedData } });
+    res.json({ success: true, data: finalData });
 
   } catch (error) {
     console.error("LabelLens Processing Error:", error);
