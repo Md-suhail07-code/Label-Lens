@@ -21,6 +21,31 @@ const Scanner = () => {
   const [capturedImage, setCapturedImage] = useState(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
+  const [detectedBarcode, setDetectedBarcode] = useState(null);
+  const barcodeScanIntervalRef = useRef(null);
+  const BARCODE_DETECTOR_SUPPORTED = typeof window !== "undefined" && "BarcodeDetector" in window;
+
+  // 🔊 Play a low beep sound on successful scan
+  const playBeep = () => {
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // Low-ish beep
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime); // Soft volume
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.15);
+    } catch (e) {
+      // Audio not supported, ignore silently
+    }
+  };
 
   // 🎥 START CAMERA
   const startCamera = async () => {
@@ -64,20 +89,74 @@ const Scanner = () => {
     setCameraActive(false);
   };
 
+  // 🏷️ BARCODE AUTO-SCAN: run detection loop when in barcode mode with active camera
+  const stopBarcodeScan = () => {
+    if (barcodeScanIntervalRef.current) {
+      clearInterval(barcodeScanIntervalRef.current);
+      barcodeScanIntervalRef.current = null;
+    }
+  };
+
+  const startBarcodeScan = () => {
+    if (!BARCODE_DETECTOR_SUPPORTED || mode !== "barcode" || !videoRef.current || !streamRef.current) return;
+
+    stopBarcodeScan();
+    const detector = new window.BarcodeDetector({ formats: ["ean_13", "ean_8", "code_128", "code_39", "qr_code", "upc_a", "upc_e"] });
+
+    barcodeScanIntervalRef.current = setInterval(async () => {
+      if (!videoRef.current?.srcObject) return;
+      try {
+        const barcodes = await detector.detect(videoRef.current);
+        if (barcodes.length > 0) {
+          const barcode = barcodes[0];
+          playBeep(); // 🔊 Beep on successful scan
+          setDetectedBarcode(barcode.rawValue || "Unknown");
+          stopCamera();
+          stopBarcodeScan();
+        }
+      } catch {
+        // ignore single-frame detection errors
+      }
+    }, 300);
+  };
+
   useEffect(() => {
     if (mode === "camera" || mode === "barcode") {
       startCamera();
       setIsScanning(true);
     } else {
       stopCamera();
+      stopBarcodeScan();
       setIsScanning(false);
       if (mode === "manual") navigate("/manual-entry");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mode-only: start/stop camera on scan mode change
+  }, [mode]);
+
+  // Reset detected barcode when switching to barcode mode (so we can scan again)
+  useEffect(() => {
+    if (mode === "barcode") queueMicrotask(() => setDetectedBarcode(null));
   }, [mode]);
 
   useEffect(() => {
-    return () => stopCamera();
+    return () => {
+      stopCamera();
+      stopBarcodeScan();
+    };
   }, []);
+
+  useEffect(() => {
+    if (mode === "barcode" && cameraActive && !capturedImage && !detectedBarcode && BARCODE_DETECTOR_SUPPORTED) {
+      const t = setTimeout(() => startBarcodeScan(), 500);
+      return () => {
+        clearTimeout(t);
+        stopBarcodeScan();
+      };
+    }
+    stopBarcodeScan();
+    return () => {};
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- startBarcodeScan reads refs; deps are sufficient
+  }, [mode, cameraActive, capturedImage, detectedBarcode, BARCODE_DETECTOR_SUPPORTED]);
 
   // 📸 CAPTURE IMAGE
   const handleCapture = () => {
@@ -108,11 +187,73 @@ const Scanner = () => {
   // 🟢 RETAKE IMAGE
   const handleRetake = async () => {
     setCapturedImage(null);
+    setDetectedBarcode(null);
     // Restart camera after small delay to ensure clean state
     if (mode === "camera" || mode === "barcode") {
       setTimeout(() => {
         startCamera();
       }, 100);
+    }
+  };
+
+  // 🔄 SCAN AGAIN (after barcode detected)
+  const handleScanAgain = () => {
+    setDetectedBarcode(null);
+    if (mode === "barcode") {
+      setTimeout(() => startCamera(), 100);
+    }
+  };
+
+  // 🏷️ USE BARCODE - lookup product via OpenFoodFacts
+  const handleUseBarcode = async () => {
+    if (!detectedBarcode) return;
+    
+    setIsAnalyzing(true);
+
+    try {
+      const backendRes = await axios.post('/api/ocr/barcode-lookup', 
+        { barcode: detectedBarcode },
+        {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (backendRes.data.success) {
+        const data = backendRes.data.data;
+
+        const verdictMap = {
+          'Safe': 'safe',
+          'Moderate': 'caution',
+          'Risky': 'danger',
+          'Hazardous': 'danger'
+        };
+
+        const historyItem = {
+          id: Date.now(),
+          productName: data.productName,
+          brand: data.brand || "Unknown",
+          score: data.riskScore,
+          verdict: verdictMap[data.verdict] || 'caution',
+          timestamp: new Date().toISOString(),
+          image: data.imageUrl,
+          analysisSummary: data.analysisSummary,
+          flaggedIngredients: data.flaggedIngredients,
+          alternatives: data.alternatives
+        };
+
+        addScan(historyItem);
+        navigate("/results", { state: { result: historyItem } });
+      } else {
+        alert(backendRes.data.message || "Product not found in database.");
+        setIsAnalyzing(false);
+      }
+    } catch (error) {
+      console.error("Barcode lookup failed:", error);
+      alert(error.response?.data?.message || "Failed to lookup barcode. Please try again.");
+      setIsAnalyzing(false);
     }
   };
 
@@ -208,7 +349,7 @@ const Scanner = () => {
       />
 
       {/* 🎥 CAMERA STREAM */}
-      {(mode === "camera" || mode === "barcode") && !capturedImage && (
+      {(mode === "camera" || mode === "barcode") && !capturedImage && !detectedBarcode && (
         <video
           ref={videoRef}
           autoPlay
@@ -219,7 +360,40 @@ const Scanner = () => {
       )}
 
       {/* 🔍 OVERLAY */}
-      {!capturedImage && <ScannerOverlay isScanning={isScanning} mode={mode} />}
+      {!capturedImage && !detectedBarcode && <ScannerOverlay isScanning={isScanning} mode={mode} />}
+
+      {/* 🏷️ DETECTED BARCODE RESULT (barcode mode only) */}
+      {mode === "barcode" && detectedBarcode && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/95 p-6">
+          <p className="text-white/70 text-sm font-medium uppercase tracking-wider mb-2">Barcode detected</p>
+          <p className="text-2xl md:text-3xl font-mono font-bold text-white text-center break-all bg-white/10 px-6 py-4 rounded-2xl border border-white/20 mb-8">
+            {detectedBarcode}
+          </p>
+          <div className="flex gap-4">
+            <button
+              onClick={handleScanAgain}
+              disabled={isAnalyzing}
+              className="px-8 py-3 rounded-full bg-gray-700 text-white font-semibold hover:bg-gray-600 transition disabled:opacity-50"
+            >
+              Scan Again
+            </button>
+            <button
+              onClick={handleUseBarcode}
+              disabled={isAnalyzing}
+              className="px-8 py-3 rounded-full bg-green-600 text-white font-semibold hover:bg-green-500 transition flex items-center gap-2 disabled:opacity-50"
+            >
+              {isAnalyzing ? (
+                <>
+                  <Loader2 className="animate-spin h-5 w-5" />
+                  Looking up...
+                </>
+              ) : (
+                "Use Barcode"
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 🔝 HEADER */}
       <div className="absolute top-4 left-4 right-4 z-20 flex justify-between items-center">
