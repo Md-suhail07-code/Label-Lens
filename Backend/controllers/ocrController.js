@@ -7,6 +7,32 @@ const OFF_HEADERS = {
   "Accept": "application/json"
 };
 
+/** Placeholder for camera/OCR scan – app uses barcode + Open Food Facts only. */
+const processImageScan = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No image provided." });
+    }
+    return res.json({
+      success: true,
+      data: {
+        productName: "Scanned Product",
+        brand: "—",
+        imageUrl: null,
+        ingredients: "Use barcode scan for product details from Open Food Facts.",
+        riskScore: 0,
+        verdict: "Info Only",
+        analysisSummary: "Use barcode scan for product details.",
+        flaggedIngredients: [],
+        alternatives: []
+      }
+    });
+  } catch (error) {
+    console.error("processImageScan:", error);
+    return res.status(500).json({ success: false, message: "Server error." });
+  }
+};
+
 const processBarcodeSearch = async (req, res) => {
   try {
     // 1. DEBUGGING: Log exactly what the frontend sent
@@ -88,5 +114,4 @@ const processBarcodeSearch = async (req, res) => {
   }
 };
 
-// Export only what we need
-export { processBarcodeSearch };
+export { processImageScan, processBarcodeSearch };
