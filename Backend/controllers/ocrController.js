@@ -11,7 +11,7 @@ const visionClient = new vision.ImageAnnotatorClient();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash" // Updated to stable model name
+  model: "gemini-1.5-flash"
 });
 
 // ---------- Cloudinary Upload ----------
@@ -151,15 +151,21 @@ const processBarcodeSearch = async (req, res) => {
       return res.status(400).json({ error: "No barcode provided" });
     }
 
+    console.log(`Searching for barcode: ${barcode}`);
+
     // Helper function to query OFF API
     const fetchFromOFF = async (code) => {
       try {
         const response = await axios.get(
             `https://world.openfoodfacts.org/api/v0/product/${code}.json`,
-            { headers: OFF_HEADERS }
+            { 
+              headers: OFF_HEADERS,
+              validateStatus: () => true // Prevent axios from throwing on 404
+            }
         );
         return response.data;
       } catch (err) {
+        console.error("OFF API Error:", err.message);
         return null;
       }
     };
@@ -168,27 +174,30 @@ const processBarcodeSearch = async (req, res) => {
     let data = await fetchFromOFF(barcode);
 
     // 2️⃣ Retry Logic: If not found and looks like UPC (12 chars), try EAN-13 (13 chars)
-    // Many scanners read UPC without the leading 0, but OFF stores it as EAN-13.
-    if ((!data || data.status !== 1) && barcode.length === 12) {
+    if ((!data || !data.product) && barcode.length === 12) {
       console.log(`Retrying UPC ${barcode} as EAN-13 (0${barcode})...`);
       const retryData = await fetchFromOFF(`0${barcode}`);
-      if (retryData && retryData.status === 1) {
+      if (retryData && retryData.product) {
         data = retryData;
       }
     }
 
-    // Check if product was found
-    if (!data || data.status !== 1 || !data.product) {
-      console.log(`Product not found for barcode: ${barcode}`);
+    // 3️⃣ Final Check: Did we get a product?
+    // We removed the strict 'status !== 1' check because sometimes OFF returns status 0 
+    // but still provides valid product data (e.g. for incomplete products).
+    if (!data || !data.product) {
+      console.log(`Product NOT found for barcode: ${barcode}`);
       return res.json({
         success: false,
         message: "Product not found in OpenFoodFacts database."
       });
     }
 
+    console.log("Product found:", data.product.product_name);
+
     const product = data.product;
     
-    // 3️⃣ Extract Data Safely (Fallbacks for missing fields)
+    // 4️⃣ Extract Data Safely (Fallbacks for missing fields)
     const productName = product.product_name || product.product_name_en || "Unknown Product";
     const brand = product.brands || product.brands_tags?.[0] || "Unknown Brand";
     
@@ -198,18 +207,17 @@ const processBarcodeSearch = async (req, res) => {
     // Ingredients fallback priority: Text -> Text En -> Empty
     const ingredients = product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.";
 
-    // 4️⃣ Placeholder Analysis (Until you re-enable Gemini)
-    // Note: Since Gemini is commented out, we return "Safe" defaults so the UI doesn't crash.
+    // 5️⃣ Placeholder Analysis (Gemini is currently disabled for barcode path)
     const riskScore = 0;
     const verdict = "Safe";
     const analysisSummary = ingredients !== "Ingredients list not available." 
-        ? "Product details retrieved from database. AI analysis pending." 
+        ? "Product details retrieved. AI analysis coming soon." 
         : "Product found, but ingredients are missing from database.";
         
     const flaggedIngredients = [];
     const alternatives = [];
 
-    // 5️⃣ Save Scan History
+    // 6️⃣ Save Scan History
     if (req.user) {
       await new ScanHistory({
         user: req.user._id,
@@ -220,11 +228,11 @@ const processBarcodeSearch = async (req, res) => {
         verdict,
         analysisSummary,
         flaggedIngredients,
-        alternatives: [] // alternatives usually need schema matching
+        alternatives: [] 
       }).save();
     }
 
-    // 6️⃣ Send Success Response
+    // 7️⃣ Send Success Response
     res.json({
       success: true,
       data: {
