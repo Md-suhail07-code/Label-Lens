@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useUserProfile } from '@/context/UserProfileContext';
-import { ScanLine, Sparkles } from 'lucide-react';
 
 const SplashScreen = () => {
   const navigate = useNavigate();
@@ -101,7 +100,7 @@ const SplashScreen = () => {
             animate={{ opacity: 1 }}
             transition={{ duration: 0.6 }}
           >
-            {/* Logo icon */}
+            {/* Logo */}
             <motion.div
               className="relative mb-8"
               initial={{ scale: 0, rotate: -180 }}
@@ -120,32 +119,16 @@ const SplashScreen = () => {
                 transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut", delay: 0.2 }}
               />
               
-              {/* Icon container */}
               <motion.div
-                className="relative flex h-28 w-28 items-center justify-center rounded-3xl bg-gradient-to-r from-blue-500 to-blue-600 shadow-2xl"
+                className="relative flex h-28 w-28 items-center justify-center rounded-3xl bg-white/90 shadow-2xl overflow-hidden"
                 animate={{ y: [0, -5, 0], rotate: [0, 3, -3, 0] }}
                 transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
               >
-                {/* Inner glass effect */}
-                <div className="absolute inset-2 rounded-2xl bg-white bg-opacity-10 backdrop-filter backdrop-blur-sm" />
-                
-                <ScanLine className="h-14 w-14 text-white relative z-10" />
-                
-                {/* Scanning beam effect */}
-                <motion.div
-                  className="absolute inset-x-4 h-1 bg-gradient-to-r from-transparent via-white opacity-70 to-transparent rounded-full"
-                  animate={{ top: ['15%', '85%', '15%'] }}
-                  transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+                <img
+                  src="/Logo.png"
+                  alt="Label Lens"
+                  className="h-20 w-20 object-contain relative z-10"
                 />
-
-                {/* Corner sparkles */}
-                <motion.div
-                  className="absolute -top-1 -right-1"
-                  animate={{ scale: [0.8, 1.2, 0.8], opacity: [0.5, 1, 0.5] }}
-                  transition={{ duration: 1.5, repeat: Infinity }}
-                >
-                  <Sparkles className="h-4 w-4 text-white" />
-                </motion.div>
               </motion.div>
             </motion.div>
 
