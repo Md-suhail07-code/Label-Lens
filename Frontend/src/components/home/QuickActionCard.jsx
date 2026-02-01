@@ -9,6 +9,7 @@ const QuickActionCard = ({
   onClick,
   gradient = "gradient-primary",
   delay = 0,
+  iconClassName,
 }) => {
   return (
     <motion.button
@@ -41,7 +42,7 @@ const QuickActionCard = ({
             "shadow-glow transition-transform duration-300 group-hover:scale-110"
           )}
         >
-          <Icon className="h-6 w-6 text-primary-foreground" />
+          <Icon className={cn("h-6 w-6", iconClassName ?? "text-primary-foreground")} />
         </div>
 
         <div className="min-w-0 flex-1">

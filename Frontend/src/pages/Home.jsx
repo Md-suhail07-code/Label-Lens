@@ -104,6 +104,7 @@ const Home = () => {
             onClick={() => navigate('/scanner', { state: { mode: 'barcode' } })}
             gradient="gradient-caution"
             delay={0.2}
+            iconClassName="text-gray-400"
           />
         </div>
       </div>

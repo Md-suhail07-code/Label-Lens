@@ -14,3 +14,14 @@ The React Compiler is not enabled on this template because of its impact on dev 
 ## Expanding the ESLint configuration
 
 If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+## Deploy on Render (SPA routing)
+
+For direct URL visits (e.g. `/home`, `/contribute`) to work instead of showing "Not Found", add a **Rewrite** rule in the [Render Dashboard](https://dashboard.render.com) for this static site:
+
+- **Redirects** → **Add Rule**
+- **Source:** `/*`
+- **Destination:** `/index.html`
+- **Action:** **Rewrite**
+
+This serves `index.html` for all paths so React Router can handle routes.
