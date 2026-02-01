@@ -215,4 +215,4 @@ const processImageScan = async (req, res) => {
     return res.json({ success: false, message: "Image scan not implemented in MVP." });
 };
 
-export { processBarcodeSearch };
+export { processBarcodeSearch, processImageScan };
