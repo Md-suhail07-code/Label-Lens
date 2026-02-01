@@ -14,8 +14,12 @@ import ScanModeToggle from "../components/scanner/ScanModeToggle";
 import ScannerOverlay from "../components/scanner/ScannerOverlay";
 import { useScanHistory } from "@/context/ScanHistoryContext";
 
-// Backend base URL – use same as Login/Signup so barcode lookup hits the API in production
+// Backend base URL
 const API_BASE = import.meta.env.VITE_API_URL || "https://label-lens-backend.onrender.com";
+
+// 🔊 SOUND URL: You can replace this string with a local import like: 
+// import beepSrc from "../assets/beep.mp3"; 
+const SCAN_SOUND_URL = "https://cdn.freesound.org/previews/242/242501_4414128-lq.mp3"; // Simple crisp beep
 
 const Scanner = () => {
   const navigate = useNavigate();
@@ -27,9 +31,11 @@ const Scanner = () => {
   const fileInputRef = useRef(null);
   const barcodeScanReqRef = useRef(null);
   const barcodeLastScanTimeRef = useRef(0);
-  const audioContextRef = useRef(null);
-  const audioUnlockedRef = useRef(false);
-  const DETECTION_INTERVAL_MS = 380; // Throttle so WASM can finish on slower devices (e.g. iPhone)
+  
+  // 🔊 Audio Ref
+  const audioRef = useRef(new Audio(SCAN_SOUND_URL));
+
+  const DETECTION_INTERVAL_MS = 380; 
 
   const initialMode = location.state?.mode || "barcode";
   const [mode, setMode] = useState(initialMode);
@@ -41,44 +47,40 @@ const Scanner = () => {
   const [barcodeFromUpload, setBarcodeFromUpload] = useState(null);
   const [isDetectingBarcodeFromUpload, setIsDetectingBarcodeFromUpload] = useState(false);
 
-  // 🔊 Unlock audio on first user interaction (required for iOS)
-  const unlockAudio = () => {
-    if (audioUnlockedRef.current) return;
-    audioUnlockedRef.current = true;
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      audioContextRef.current = ctx;
-      ctx.resume().then(() => {
-        const oscillator = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        gainNode.gain.setValueAtTime(0, ctx.currentTime);
-        oscillator.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        oscillator.start(ctx.currentTime);
-        oscillator.stop(ctx.currentTime + 0.01);
-      }).catch(() => {});
-    } catch { /* ignore */ }
-  };
+  // 🔊 Unlock audio on first user interaction (Critically needed for iOS/Chrome)
+  useEffect(() => {
+    const unlockAudio = () => {
+      const audio = audioRef.current;
+      // Play mute briefly to unlock the audio engine for this element
+      audio.muted = true;
+      audio.play().then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.muted = false; // Unmute for future actual plays
+      }).catch(err => console.warn("Audio unlock failed", err));
+
+      ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
+        document.body.removeEventListener(e, unlockAudio)
+      );
+    };
+
+    ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
+      document.body.addEventListener(e, unlockAudio, { once: true, passive: true })
+    );
+  }, []);
 
   // 🔊 Play beep + vibrate on successful scan
   const onScanSuccess = () => {
+    // 1. Vibrate
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-    try {
-      const ctx = audioContextRef.current;
-      if (ctx && ctx.state !== "closed") {
-        if (ctx.state === "suspended") ctx.resume();
-        const oscillator = ctx.createOscillator();
-        const gainNode = ctx.createGain();
-        oscillator.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        oscillator.type = "sine";
-        oscillator.frequency.setValueAtTime(800, ctx.currentTime);
-        gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-        oscillator.start(ctx.currentTime);
-        oscillator.stop(ctx.currentTime + 0.15);
-      }
-    } catch { /* Audio not supported */ }
+
+    // 2. Play Sound
+    const audio = audioRef.current;
+    if (audio) {
+      audio.currentTime = 0; // Reset to start (allows rapid fire scanning)
+      audio.volume = 1.0;    // Ensure max volume
+      audio.play().catch((e) => console.error("Sound play failed:", e));
+    }
   };
 
   // 🎥 START CAMERA
@@ -91,11 +93,9 @@ const Scanner = () => {
 
       if (streamRef.current) stopCamera();
 
-      // iOS Safari handles constraints differently. 
-      // We try high res, but if it fails, the browser usually falls back automatically.
       const constraints = {
         video: { 
-          facingMode: "environment", // Essential for mobile rear camera
+          facingMode: "environment", 
           width: { ideal: 1920 },
           height: { ideal: 1080 } 
         },
@@ -105,10 +105,8 @@ const Scanner = () => {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
       streamRef.current = stream;
-      unlockAudio();
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        // iOS requires 'playsInline' in the video tag (already added below)
         videoRef.current.onloadedmetadata = async () => {
           await videoRef.current.play();
           setCameraActive(true);
@@ -116,14 +114,12 @@ const Scanner = () => {
       }
     } catch (err) {
       console.error("Camera Error:", err);
-      // Fallback for older devices/strict permissions
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: "environment" },
             audio: false
         });
         streamRef.current = stream;
-        unlockAudio();
         if (videoRef.current) {
             videoRef.current.srcObject = stream;
             await videoRef.current.play();
@@ -147,7 +143,7 @@ const Scanner = () => {
     setCameraActive(false);
   };
 
-  // 🔍 BARCODE SCAN LOGIC (Cross-browser: native on Chrome/Android, polyfill on iOS/Firefox)
+  // 🔍 BARCODE SCAN LOGIC
   const startBarcodeScan = async () => {
     if (!videoRef.current) return;
 
@@ -159,7 +155,6 @@ const Scanner = () => {
     ];
 
     try {
-      // window.BarcodeDetector is native where supported, or our polyfill (installed at top of file)
       const DetectorClass = window.BarcodeDetector;
       if (!DetectorClass) {
         console.error("BarcodeDetector not available");
@@ -176,11 +171,8 @@ const Scanner = () => {
         const now = Date.now();
         const timeSinceLastScan = now - barcodeLastScanTimeRef.current;
 
-        // 1) Video must be playing with real dimensions (critical on iOS – often 0 until ready)
         const hasDimensions = video.videoWidth > 0 && video.videoHeight > 0;
         const isReady = video.readyState >= video.HAVE_ENOUGH_DATA;
-
-        // 2) Throttle: run detection at most every DETECTION_INTERVAL_MS so WASM can finish on slower devices
         const shouldScan = hasDimensions && isReady && timeSinceLastScan >= DETECTION_INTERVAL_MS;
 
         if (shouldScan) {
@@ -189,13 +181,14 @@ const Scanner = () => {
             const barcodes = await barcodeDetector.detect(video);
             if (barcodes.length > 0) {
               const bestMatch = barcodes[0].rawValue;
-              onScanSuccess();
+              // 🔊 TRIGGER SOUND HERE
+              onScanSuccess(); 
               setDetectedBarcode(bestMatch);
               stopBarcodeScan();
               return;
             }
           } catch {
-            // Single frame failure (e.g. WASM busy) – keep scanning
+            // Single frame failure – keep scanning
           }
         }
 
@@ -215,7 +208,6 @@ const Scanner = () => {
     }
   };
 
-  // Detect barcode from a static image (data URL or URL) – used for upload in barcode mode
   const detectBarcodeFromImage = (imageSrc) => {
     const formats = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "qr_code"];
     return new Promise((resolve) => {
@@ -266,24 +258,6 @@ const Scanner = () => {
     };
   }, []);
 
-  // Unlock audio on first user interaction (touch/click) - required for iOS
-  useEffect(() => {
-    const unlock = () => {
-      unlockAudio();
-      ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
-        document.body.removeEventListener(e, unlock)
-      );
-    };
-    ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
-      document.body.addEventListener(e, unlock, { once: true, passive: true })
-    );
-    return () => {
-      ["touchstart", "touchend", "mousedown", "click"].forEach((e) =>
-        document.body.removeEventListener(e, unlock)
-      );
-    };
-  }, []);
-
   useEffect(() => {
     if (mode === "barcode" && cameraActive && !capturedImage && !detectedBarcode) {
       const t = setTimeout(() => startBarcodeScan(), 500);
@@ -327,21 +301,16 @@ const Scanner = () => {
     }
   };
 
-  // ... (API Calls: handleUseBarcode, handleUploadClick, handleFileChange, handleUsePhoto remain the same) ...
-  // Keep your existing API logic functions here exactly as they were in the previous file.
-  
   const handleUseBarcode = async () => {
     if (!detectedBarcode) return;
     setIsAnalyzing(true);
     
-    // CLEAN THE BARCODE BEFORE SENDING
     const barcodeToSend = String(detectedBarcode).trim();
-
-    console.log("Sending barcode to backend:", barcodeToSend); // Check browser console
+    console.log("Sending barcode to backend:", barcodeToSend);
 
     try {
       const backendRes = await axios.post(`${API_BASE}/api/ocr/barcode-lookup`, 
-        { barcode: barcodeToSend }, // Payload
+        { barcode: barcodeToSend }, 
         {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('accessToken')}`, 
@@ -395,16 +364,19 @@ const Scanner = () => {
         setBarcodeFromUpload(null);
         setIsDetectingBarcodeFromUpload(true);
         detectBarcodeFromImage(dataUrl).then((barcode) => {
+          if (barcode) {
+            onScanSuccess(); // 🔊 PLAY SOUND + VIBRATE
+          }
           setBarcodeFromUpload(barcode);
           setIsDetectingBarcodeFromUpload(false);
         });
+
       }
     };
     reader.readAsDataURL(file);
     e.target.value = "";
   };
 
-  // In barcode mode with uploaded image: use detected barcode (or detect now) then lookup
   const handleUsePhotoAsBarcode = async () => {
     if (!capturedImage) return;
     setIsAnalyzing(true);
@@ -453,7 +425,6 @@ const Scanner = () => {
     }
   };
 
-  // In camera/photo mode: OCR + ingredient analysis
   const handleUsePhoto = async () => {
     if (!capturedImage) return;
     setIsAnalyzing(true);
@@ -493,7 +464,6 @@ const Scanner = () => {
     }
   };
 
-  // Use Photo: in barcode mode → detect barcode and lookup; in camera mode → OCR
   const handleUsePhotoOrBarcode = () => {
     if (mode === "barcode") handleUsePhotoAsBarcode();
     else handleUsePhoto();
@@ -509,12 +479,12 @@ const Scanner = () => {
         className="hidden"
       />
 
-      {/* 🎥 CAMERA STREAM - keep visible when barcode found so translucent overlay shows feed */}
+      {/* 🎥 CAMERA STREAM */}
       {(mode === "camera" || mode === "barcode") && !capturedImage && (
         <video
           ref={videoRef}
           muted
-          playsInline // ESSENTIAL FOR IPHONE
+          playsInline
           className="absolute inset-0 h-full w-full object-cover"
         />
       )}
@@ -522,7 +492,7 @@ const Scanner = () => {
       {/* 🔍 OVERLAY */}
       {!capturedImage && !detectedBarcode && <ScannerOverlay isScanning={isScanning} mode={mode} />}
 
-      {/* 🏷️ DETECTED BARCODE RESULT - translucent overlay + floating glossy card */}
+      {/* 🏷️ DETECTED BARCODE RESULT */}
       {mode === "barcode" && detectedBarcode && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/40 backdrop-blur-sm p-6 animate-in fade-in duration-200">
           <div className="w-full max-w-sm rounded-[28px] bg-black/40 backdrop-blur-xl border border-white/20 shadow-2xl p-6 flex flex-col items-center">
@@ -565,7 +535,6 @@ const Scanner = () => {
           </button>
           <ScanModeToggle mode={mode} onModeChange={setMode} />
         </div>
-        {/* 📤 UPLOAD BUTTON - below mode options, no overlap */}
         {(mode === "camera" || mode === "barcode") && !capturedImage && !detectedBarcode && (
           <div className="flex justify-center">
             <button
@@ -610,7 +579,6 @@ const Scanner = () => {
             alt="Captured" 
             className="max-w-full max-h-[60%] rounded-xl shadow-2xl border border-gray-700 object-contain" 
           />
-          {/* Show detected barcode number in barcode mode */}
           {mode === "barcode" && (
             <div className="mt-4 w-full max-w-sm text-center">
               {isDetectingBarcodeFromUpload ? (
