@@ -1,4 +1,14 @@
 import axios from 'axios';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Using gemini-1.5-flash for speed and cost-efficiency (closest valid model to your request)
+const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
 const OFF_HEADERS = {
   "User-Agent": "LabelLens/1.0 (Educational Project)",
@@ -64,32 +74,80 @@ async function searchOffByCode(code) {
   return null;
 }
 
-/** Build API response shape from OFF product object */
-function buildResultData(product) {
-  const nutriScore = (product.nutriscore_grade || 'unknown').toLowerCase();
-  let derivedVerdict = 'moderate';
-  let derivedScore = 50;
-  if (['a', 'b'].includes(nutriScore)) { derivedVerdict = 'safe'; derivedScore = 15; }
-  else if (['c', 'd'].includes(nutriScore)) { derivedVerdict = 'moderate'; derivedScore = 55; }
-  else if (nutriScore === 'e') { derivedVerdict = 'unsafe'; derivedScore = 85; }
+/** * Call Gemini AI to analyze ingredients 
+ */
+async function analyzeWithGemini(productName, ingredientsText, healthCondition, allergies) {
+  try {
+    const prompt = `
+        You are a food ingredient risk analysis engine.
 
-  return {
-    productName: product.product_name || product.product_name_en || "Unknown Product",
-    brand: product.brands || "Unknown Brand",
-    image: product.image_front_url || product.image_url || null,
-    ingredients: product.ingredients_text || product.ingredients_text_en || "Ingredients list not available.",
-    riskScore: derivedScore,
-    verdict: derivedVerdict,
-    analysisSummary: `NutriScore: ${nutriScore.toUpperCase()}. (MVP: Detailed analysis is a placeholder).`,
-    flaggedIngredients: derivedVerdict === 'unsafe' ? [{ name: "High Risk Additives", reason: "Low NutriScore (E)." }] : [],
-    alternatives: []
-  };
+        Analyze the following INGREDIENT LIST exactly as written:
+        "${ingredientsText}"
+        These ingredients are the ingredients of the product "${productName}"
+        
+        User Health Context:
+        - Health Condition: ${healthCondition || "None"}
+        - Allergies: ${allergies && allergies.length ? allergies.join(", ") : "None"}
+
+        Rules:
+        - Consider Indian packaged food context.
+        - Be conservative and factual.
+        - Do NOT give medical advice.
+        - Consider allergies and health condition while assigning risk.
+        - If any ingredient conflicts with allergies, increase risk.
+
+        Return ONLY a valid JSON object.
+        NO markdown. NO explanations outside JSON.
+
+        JSON Schema:
+        {
+          "productName": "Estimated product name",
+          "riskScore": 0-100,
+          "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
+          "analysisSummary": "One short sentence summary",
+          "flaggedIngredients": [
+            {
+              "name": "Ingredient name",
+              "risk": "Low" | "Medium" | "High",
+              "reason": "Simple explanation"
+            }
+          ],
+          "alternatives": [
+            "The healthiest alternative product name to the product from the same category",
+            "Another healthier alternative product name to the product from the same category"
+          ]
+        }
+    `;
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let text = response.text();
+
+    // Clean markdown if Gemini wraps response in ```json ... ```
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    
+    return JSON.parse(text);
+  } catch (error) {
+    console.error("Gemini Analysis Failed:", error);
+    // Fallback if AI fails
+    return {
+      productName: productName,
+      riskScore: 50,
+      verdict: "Unknown",
+      analysisSummary: "AI Analysis failed. Showing raw ingredients.",
+      flaggedIngredients: [],
+      alternatives: []
+    };
+  }
 }
 
 // --- CONTROLLER: Process Barcode Search ---
 const processBarcodeSearch = async (req, res) => {
   try {
     const rawBarcode = req.body?.barcode;
+    // Extract user health data from request body (ensure your frontend sends these)
+    const { healthCondition, allergies } = req.body; 
+
     if (rawBarcode == null || String(rawBarcode).trim() === '') {
       return res.status(400).json({ success: false, message: "No barcode provided." });
     }
@@ -97,43 +155,58 @@ const processBarcodeSearch = async (req, res) => {
     const barcode = String(rawBarcode).trim();
     console.log(`🔹 Processing barcode: ${barcode}`);
 
-    // 1) Try .org v0 product API
+    // 1. Fetch Product from OpenFoodFacts (Try multiple endpoints)
     let product = await fetchOffProduct(barcode, 'org');
-    if (product) {
-      console.log('✅ Found via OFF .org v0');
-      const resultData = buildResultData(product);
-      return res.json({ success: true, data: resultData });
+    if (!product) product = await fetchOffProduct(barcode, 'net');
+    if (!product) product = await fetchOffProductV2(barcode);
+    if (!product) product = await searchOffByCode(barcode);
+
+    if (!product) {
+      console.log('❌ Product not found in OFF.');
+      return res.json({
+        success: false,
+        message: "Product not found. Please try scanning again."
+      });
     }
 
-    // 2) Try .net v0 (often works when .org fails from server)
-    product = await fetchOffProduct(barcode, 'net');
-    if (product) {
-      console.log('✅ Found via OFF .net v0');
-      const resultData = buildResultData(product);
-      return res.json({ success: true, data: resultData });
+    console.log('✅ Found product via OFF:', product.product_name || "Unknown Name");
+
+    // 2. Prepare Data for Gemini
+    const productName = product.product_name || product.product_name_en || "Unknown Product";
+    const ingredientsText = product.ingredients_text || product.ingredients_text_en || "";
+    const productImage = product.image_front_url || product.image_url || null;
+    const brand = product.brands || "Unknown Brand";
+
+    if (!ingredientsText) {
+       return res.json({
+         success: true,
+         data: {
+            productName,
+            brand,
+            image: productImage,
+            riskScore: 0,
+            verdict: "Unknown",
+            analysisSummary: "Ingredients list missing in database. Cannot analyze.",
+            flaggedIngredients: [],
+            alternatives: []
+         }
+       });
     }
 
-    // 3) Try .net v2 product API
-    product = await fetchOffProductV2(barcode);
-    if (product) {
-      console.log('✅ Found via OFF .net v2');
-      const resultData = buildResultData(product);
-      return res.json({ success: true, data: resultData });
-    }
+    // 3. Get AI Analysis
+    const aiAnalysis = await analyzeWithGemini(productName, ingredientsText, healthCondition, allergies);
 
-    // 4) Fallback: search by barcode (search_terms)
-    product = await searchOffByCode(barcode);
-    if (product) {
-      console.log('✅ Found via OFF search API');
-      const resultData = buildResultData(product);
-      return res.json({ success: true, data: resultData });
-    }
+    // 4. Merge OFF Data with AI Data
+    const resultData = {
+      ...aiAnalysis, // verdict, riskScore, flaggedIngredients, alternatives
+      productName: aiAnalysis.productName || productName, // Prefer AI cleaned name
+      brand: brand,
+      image: productImage,
+      ingredients: ingredientsText
+    };
 
-    console.log('❌ Product not found in OFF (tried .org, .net, search).');
-    return res.json({
-      success: false,
-      message: "Product not found. Please try scanning again."
-    });
+    return res.json({ success: true, data: resultData });
+
   } catch (error) {
     console.error("🔥 Server Error:", error.message);
     return res.status(500).json({
@@ -143,7 +216,7 @@ const processBarcodeSearch = async (req, res) => {
   }
 };
 
-// Placeholder for Image Scan (Keep to prevent router errors if you have this route defined)
+// Placeholder for Image Scan
 const processImageScan = async (req, res) => {
     return res.json({ success: false, message: "Image scan not implemented in MVP." });
 };
