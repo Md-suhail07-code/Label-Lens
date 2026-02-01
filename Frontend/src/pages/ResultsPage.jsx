@@ -221,6 +221,7 @@ function RiskAccordion({ title, icon, items, theme }) {
 }
 
 // --- COMPONENT: BETTER ALTERNATIVES ---
+// --- COMPONENT: BETTER ALTERNATIVES ---
 function BetterAlternatives({ alternatives, loading }) {
   if (loading) {
     return (
@@ -253,10 +254,16 @@ function BetterAlternatives({ alternatives, loading }) {
                     src={alt.image} 
                     alt={alt.name}
                     className="w-full h-full object-contain"
+                    // SAFETY NET: If image fails to load, force Bing placeholder
+                    onError={(e) => {
+                      e.target.onerror = null; 
+                      e.target.src = `https://tse1.mm.bing.net/th?q=${encodeURIComponent(alt.name)}&pid=Api&P=0&h=200`;
+                    }}
                   />
                ) : (
-                 <div className="w-full h-full flex items-center justify-center">
-                    <span className="text-xs text-gray-300">No Img</span>
+                 // Last resort: If image is null from the start, show a letter avatar
+                 <div className="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400 font-bold text-xl">
+                    {alt.name.charAt(0)}
                  </div>
                )}
                {alt.nutriscore && (
@@ -265,12 +272,17 @@ function BetterAlternatives({ alternatives, loading }) {
                  </div>
                )}
             </div>
-            <p className="font-bold text-gray-900 text-xs mb-1 leading-snug whitespace-normal">{alt.name}</p>
+            <p className="font-bold text-gray-900 text-xs mb-1 leading-snug whitespace-normal line-clamp-2">{alt.name}</p>
             <p className="text-[10px] text-gray-400 truncate mb-2">{alt.brand}</p>
             
-            <button className="w-full py-1.5 rounded-lg bg-gray-900 text-white text-[9px] font-bold mt-auto transition-transform active:scale-95 cursor-pointer">
-              View
-            </button>
+            <a 
+              href={`https://www.google.com/search?q=${encodeURIComponent(alt.name + " buy india")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full py-1.5 rounded-lg bg-gray-900 text-white text-[9px] font-bold mt-auto transition-transform active:scale-95 cursor-pointer flex items-center justify-center"
+            >
+              Buy Now
+            </a>
           </div>
         ))}
       </div>
@@ -311,7 +323,6 @@ const ResultsPage = () => {
   }, [result]);
 
   const fetchAlternativesImages = async (altObjects) => {
-    // If we already have images, stop
     if (altObjects[0]?.image) {
       setAlternatives(altObjects);
       setLoadingAlts(false);
@@ -325,7 +336,7 @@ const ResultsPage = () => {
         let brand = "Generic";
         let nutriscore = null;
 
-        // 1. Try OpenFoodFacts First (Best Quality)
+        // 1. Try OpenFoodFacts First
         try {
           const res = await axios.get(`https://world.openfoodfacts.org/cgi/search.pl`, {
             params: {
@@ -340,19 +351,23 @@ const ResultsPage = () => {
 
           const product = res.data.products?.[0];
           if (product) {
-            imageUrl = product.image_front_url || product.image_url;
+            // Only use OFF image if it actually exists
+            if (product.image_front_url || product.image_url) {
+                imageUrl = product.image_front_url || product.image_url;
+            }
             brand = product.brands || "Generic";
             nutriscore = product.nutriscore_grade?.toUpperCase();
           }
         } catch (e) {
-          console.log("OFF Search failed, trying fallback...");
+          console.log("OFF Search failed for", searchTerm);
         }
 
-        // 2. Fallback: Bing Image Hack (If OFF failed)
-        // This is a "Hackathon Special" URL that works without an API key
+        // 2. Fallback: Bing Image Hack (If OFF returned nothing or no image)
         if (!imageUrl) {
-          imageUrl = `https://tse2.mm.bing.net/th?q=${encodeURIComponent(searchTerm + " indian food product packaging")}&w=200&h=200&c=7&rs=1&p=0`;
-          brand = "Best Match"; // Fallback brand name
+          console.log("Using Bing Fallback for:", searchTerm); // Check Console!
+          // Simplified Bing URL that is more reliable
+          imageUrl = `https://tse1.mm.bing.net/th?q=${encodeURIComponent(searchTerm)}&pid=Api&P=0&h=200`;
+          if (brand === "Generic") brand = "Best Match";
         }
 
         return {
