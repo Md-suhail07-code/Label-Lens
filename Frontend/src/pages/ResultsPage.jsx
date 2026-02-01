@@ -397,8 +397,8 @@ const ResultsPage = () => {
           onShare={handleShare}
         />
 
-           {/* Content Container with negative margin adjustment for the cards */}
-           <div className="px-6 -mt-4 relative z-20 flex flex-col gap-3">
+           {/* Content Container: enough top margin so ingredients card clears the product card */}
+           <div className="px-6 mt-6 relative z-20 flex flex-col gap-3">
              
              {/* Ingredients Card */}
              <div className="w-full bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">

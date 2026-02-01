@@ -93,10 +93,11 @@ const Contribute = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background pb-24">
-      <Header title="Contribute" showBack />
+    <div className="min-h-screen bg-background flex justify-center font-sans">
+      <div className="w-full max-w-md bg-background min-h-screen shadow-2xl flex flex-col pb-28">
+        <Header title="Contribute" showBack />
 
-      <div className="pt-20 px-6">
+        <div className="pt-20 px-6 flex-1">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -213,9 +214,10 @@ const Contribute = () => {
             </Button>
           </form>
         </motion.div>
-      </div>
+        </div>
 
-      <BottomNav />
+        <BottomNav />
+      </div>
     </div>
   );
 };
