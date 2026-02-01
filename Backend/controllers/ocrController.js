@@ -89,28 +89,17 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
         - Health Condition: ${healthCondition || "None"}
         - Allergies: ${allergies && allergies.length ? allergies.join(", ") : "None"}
 
-        Rules:
-        - Consider Indian packaged food context.
-        - Be conservative and factual.
-        - Do NOT give medical advice.
-        - Consider allergies and health condition while assigning risk.
-        - If any ingredient conflicts with allergies, increase risk.
-
-        CRITICAL TASK (TEXT CLEANING):
-        The input text may contain OCR errors, symbols like '_', '^', '*', or formatting issues. 
-        You MUST output a "cleanedIngredients" field where you:
-        1. Remove all non-standard symbols (_, ^, *, etc).
-        2. Fix capitalization (Title Case).
-        3. Fix spacing errors.
-        4. Keep the ingredient list accurate to the product.
+        CRITICAL INSTRUCTION (TEXT CLEANING):
+        The input text contains OCR errors (symbols like '_', '^', '*'), bad spacing, and formatting issues.
+        Your FIRST task is to fix this text into a readable, comma-separated list.
 
         Return ONLY a valid JSON object.
         NO markdown. NO explanations outside JSON.
 
         JSON Schema:
         {
+          "cleanedIngredients": "THE CORRECTED, HUMAN-READABLE INGREDIENT LIST GOES HERE",
           "productName": "Estimated product name",
-          "cleanedIngredients": "The fully sanitized, readable ingredient text",
           "riskScore": 0-100,
           "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
           "analysisSummary": "One short sentence summary",
@@ -122,8 +111,8 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
             }
           ],
           "alternatives": [
-            "The healthiest alternative product name to the product from the same category. The item you suggest must be a packaged food item from the same category.",
-            "Another healthier alternative product name to the product from the same category. The item you suggest must be a packaged food item from the same category."
+            "Alternative Product 1 Name",
+            "Alternative Product 2 Name"
           ]
         }
     `;
@@ -140,6 +129,7 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
     console.error("Gemini Analysis Failed:", error);
     // Fallback if AI fails
     return {
+      cleanedIngredients: null, // Explicit null to trigger fallback
       productName: productName,
       riskScore: 50,
       verdict: "Unknown",
@@ -154,7 +144,6 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
 const processBarcodeSearch = async (req, res) => {
   try {
     const rawBarcode = req.body?.barcode;
-    // Extract user health data from request body (ensure your frontend sends these)
     const { healthCondition, allergies } = req.body; 
 
     if (rawBarcode == null || String(rawBarcode).trim() === '') {
@@ -164,64 +153,45 @@ const processBarcodeSearch = async (req, res) => {
     const barcode = String(rawBarcode).trim();
     console.log(`🔹 Processing barcode: ${barcode}`);
 
-    // 1. Fetch Product from OpenFoodFacts (Try multiple endpoints)
+    // 1. Fetch Product from OpenFoodFacts
     let product = await fetchOffProduct(barcode, 'org');
     if (!product) product = await fetchOffProduct(barcode, 'net');
     if (!product) product = await fetchOffProductV2(barcode);
     if (!product) product = await searchOffByCode(barcode);
 
     if (!product) {
-      console.log('❌ Product not found in OFF.');
-      return res.json({
-        success: false,
-        message: "Product not found. Please try scanning again."
-      });
+      return res.json({ success: false, message: "Product not found." });
     }
 
-    console.log('✅ Found product via OFF:', product.product_name || "Unknown Name");
-
-    // 2. Prepare Data for Gemini
+    // 2. Prepare Data
     const productName = product.product_name || product.product_name_en || "Unknown Product";
     const ingredientsText = product.ingredients_text || product.ingredients_text_en || "";
     const productImage = product.image_front_url || product.image_url || null;
     const brand = product.brands || "Unknown Brand";
 
-    if (!ingredientsText) {
-       return res.json({
-         success: true,
-         data: {
-            productName,
-            brand,
-            image: productImage,
-            riskScore: 0,
-            verdict: "Unknown",
-            analysisSummary: "Ingredients list missing in database. Cannot analyze.",
-            flaggedIngredients: [],
-            alternatives: []
-         }
-       });
+    // 3. Get AI Analysis
+    let aiAnalysis = {};
+    if (ingredientsText) {
+        aiAnalysis = await analyzeWithGemini(productName, ingredientsText, healthCondition, allergies);
+        console.log("🤖 Gemini Cleaned Ingredients:", aiAnalysis.cleanedIngredients ? "Yes" : "No"); // Debug Log
     }
 
-    // 3. Get AI Analysis
-    const aiAnalysis = await analyzeWithGemini(productName, ingredientsText, healthCondition, allergies);
-
-    // 4. Merge OFF Data with AI Data
+    // 4. Merge Data (CRITICAL FIX HERE)
     const resultData = {
-      ...aiAnalysis, // verdict, riskScore, flaggedIngredients, alternatives
-      productName: aiAnalysis.productName || productName, // Prefer AI cleaned name
+      ...aiAnalysis, 
+      productName: aiAnalysis.productName || productName,
       brand: brand,
       image: productImage,
-      ingredients: ingredientsText
+      // LOGIC FIX: If AI cleaned it, use that. If not, use raw text.
+      ingredients: aiAnalysis.cleanedIngredients || ingredientsText, 
+      rawIngredients: ingredientsText // Keep raw as backup
     };
 
     return res.json({ success: true, data: resultData });
 
   } catch (error) {
     console.error("🔥 Server Error:", error.message);
-    return res.status(500).json({
-      success: false,
-      message: "Server error connecting to product database."
-    });
+    return res.status(500).json({ success: false, message: "Server error." });
   }
 };
 
