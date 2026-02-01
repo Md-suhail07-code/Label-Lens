@@ -323,6 +323,7 @@ const ResultsPage = () => {
   }, [result]);
 
   const fetchAlternativesImages = async (altObjects) => {
+    // If we already have images, stop
     if (altObjects[0]?.image) {
       setAlternatives(altObjects);
       setLoadingAlts(false);
@@ -336,7 +337,7 @@ const ResultsPage = () => {
         let brand = "Generic";
         let nutriscore = null;
 
-        // 1. Try OpenFoodFacts First
+        // 1. Try OpenFoodFacts with a STRICT TIMEOUT (The Speed Fix)
         try {
           const res = await axios.get(`https://world.openfoodfacts.org/cgi/search.pl`, {
             params: {
@@ -346,12 +347,12 @@ const ResultsPage = () => {
               json: 1,
               fields: 'product_name,image_front_url,image_url,brands,nutriscore_grade',
               page_size: 1
-            }
+            },
+            timeout: 1200 // <--- KILL REQUEST AFTER 1.2 SECONDS
           });
 
           const product = res.data.products?.[0];
           if (product) {
-            // Only use OFF image if it actually exists
             if (product.image_front_url || product.image_url) {
                 imageUrl = product.image_front_url || product.image_url;
             }
@@ -359,13 +360,13 @@ const ResultsPage = () => {
             nutriscore = product.nutriscore_grade?.toUpperCase();
           }
         } catch (e) {
-          console.log("OFF Search failed for", searchTerm);
+          // If it times out or fails, we just silently move to Bing
+          // console.log("OFF Slow/Failed, skipping...");
         }
 
-        // 2. Fallback: Bing Image Hack (If OFF returned nothing or no image)
+        // 2. Fallback: Bing Image Hack (Instant)
         if (!imageUrl) {
-          console.log("Using Bing Fallback for:", searchTerm); // Check Console!
-          // Simplified Bing URL that is more reliable
+          // console.log("Using Bing Fallback for:", searchTerm);
           imageUrl = `https://tse1.mm.bing.net/th?q=${encodeURIComponent(searchTerm)}&pid=Api&P=0&h=200`;
           if (brand === "Generic") brand = "Best Match";
         }
