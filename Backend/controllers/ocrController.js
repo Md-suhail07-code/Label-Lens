@@ -122,8 +122,8 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
             }
           ],
           "alternatives": [
-            "The healthiest alternative product name to the product from the same category",
-            "Another healthier alternative product name to the product from the same category"
+            "The healthiest alternative product name to the product from the same category. The item you suggest must be a packaged food item from the same category.",
+            "Another healthier alternative product name to the product from the same category. The item you suggest must be a packaged food item from the same category."
           ]
         }
     `;
