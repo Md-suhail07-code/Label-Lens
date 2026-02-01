@@ -129,7 +129,7 @@ function ProductHeader({ status, productName, productImage, riskScore, onBack, o
                  </div>
                )}
              </div>
-             <span className="bg-gray-900 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg text-center leading-tight line-clamp-1 max-w-full">
+             <span className="bg-gray-900 text-white text-[10px] font-bold px-3 py-2 rounded-xl shadow-lg text-center leading-tight max-w-full whitespace-normal">
                {productName || "Unknown Product"}
              </span>
           </div>
@@ -221,6 +221,7 @@ function RiskAccordion({ title, icon, items, theme }) {
 }
 
 // --- COMPONENT: BETTER ALTERNATIVES ---
+// --- COMPONENT: BETTER ALTERNATIVES ---
 function BetterAlternatives({ alternatives, loading }) {
   if (loading) {
     return (
@@ -241,11 +242,11 @@ function BetterAlternatives({ alternatives, loading }) {
         <h2 className="text-lg font-bold text-gray-900">Healthy Swaps</h2>
       </div>
       
-      <div className="grid grid-cols-3 gap-3 px-6">
+      <div className="grid grid-cols-2 gap-4 px-6">
         {alternatives.map((alt, index) => (
           <div 
             key={index} 
-            className="bg-white rounded-[16px] border border-gray-100 p-2 flex flex-col shadow-sm hover:shadow-md transition-shadow"
+            className="bg-white rounded-[16px] border border-gray-100 p-3 flex flex-col shadow-sm hover:shadow-md transition-shadow"
           >
             <div className="relative aspect-square mb-2 rounded-xl overflow-hidden bg-gray-50 border border-gray-50">
                {alt.image ? (
@@ -253,10 +254,16 @@ function BetterAlternatives({ alternatives, loading }) {
                     src={alt.image} 
                     alt={alt.name}
                     className="w-full h-full object-contain"
+                    // SAFETY NET: If image fails to load, force Bing placeholder
+                    onError={(e) => {
+                      e.target.onerror = null; 
+                      e.target.src = `https://tse1.mm.bing.net/th?q=${encodeURIComponent(alt.name)}&pid=Api&P=0&h=200`;
+                    }}
                   />
                ) : (
-                 <div className="w-full h-full flex items-center justify-center">
-                    <span className="text-xs text-gray-300">No Img</span>
+                 // Last resort: If image is null from the start, show a letter avatar
+                 <div className="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400 font-bold text-xl">
+                    {alt.name.charAt(0)}
                  </div>
                )}
                {alt.nutriscore && (
@@ -265,12 +272,17 @@ function BetterAlternatives({ alternatives, loading }) {
                  </div>
                )}
             </div>
-            <p className="font-bold text-gray-900 text-[10px] mb-1 truncate leading-tight">{alt.name}</p>
-            <p className="text-[9px] text-gray-400 truncate mb-2">{alt.brand}</p>
+            <p className="font-bold text-gray-900 text-xs mb-1 leading-snug whitespace-normal line-clamp-2">{alt.name}</p>
+            <p className="text-[10px] text-gray-400 truncate mb-2">{alt.brand}</p>
             
-            <button className="w-full py-1.5 rounded-lg bg-gray-900 text-white text-[9px] font-bold mt-auto transition-transform active:scale-95 cursor-pointer">
-              View
-            </button>
+            <a 
+              href={`https://www.google.com/search?q=${encodeURIComponent(alt.name + " buy india")}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full py-1.5 rounded-lg bg-gray-900 text-white text-[9px] font-bold mt-auto transition-transform active:scale-95 cursor-pointer flex items-center justify-center"
+            >
+              Buy Now
+            </a>
           </div>
         ))}
       </div>
@@ -319,28 +331,51 @@ const ResultsPage = () => {
 
     const enrichedAlts = await Promise.all(
       altObjects.map(async (alt) => {
+        const searchTerm = alt.productName || alt.name || alt;
+        let imageUrl = null;
+        let brand = "Generic";
+        let nutriscore = null;
+
+        // 1. Try OpenFoodFacts First
         try {
-          const searchTerm = alt.productName || alt.name || alt;
           const res = await axios.get(`https://world.openfoodfacts.org/cgi/search.pl`, {
             params: {
               search_terms: searchTerm,
               search_simple: 1,
               action: 'process',
               json: 1,
-              fields: 'product_name,image_front_url,image_url,brands,nutriscore_grade'
+              fields: 'product_name,image_front_url,image_url,brands,nutriscore_grade',
+              page_size: 1
             }
           });
 
           const product = res.data.products?.[0];
-          return {
-            name: searchTerm,
-            image: product ? (product.image_front_url || product.image_url) : null,
-            brand: product ? product.brands : "Generic",
-            nutriscore: product ? product.nutriscore_grade?.toUpperCase() : null
-          };
+          if (product) {
+            // Only use OFF image if it actually exists
+            if (product.image_front_url || product.image_url) {
+                imageUrl = product.image_front_url || product.image_url;
+            }
+            brand = product.brands || "Generic";
+            nutriscore = product.nutriscore_grade?.toUpperCase();
+          }
         } catch (e) {
-          return { name: alt.productName || alt, image: null, brand: "Generic", nutriscore: null };
+          console.log("OFF Search failed for", searchTerm);
         }
+
+        // 2. Fallback: Bing Image Hack (If OFF returned nothing or no image)
+        if (!imageUrl) {
+          console.log("Using Bing Fallback for:", searchTerm); // Check Console!
+          // Simplified Bing URL that is more reliable
+          imageUrl = `https://tse1.mm.bing.net/th?q=${encodeURIComponent(searchTerm)}&pid=Api&P=0&h=200`;
+          if (brand === "Generic") brand = "Best Match";
+        }
+
+        return {
+          name: searchTerm,
+          image: imageUrl,
+          brand: brand,
+          nutriscore: nutriscore
+        };
       })
     );
     
