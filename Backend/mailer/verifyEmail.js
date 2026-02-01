@@ -18,24 +18,33 @@ export const verifyMail = async (token, email) => {
     const template = handlebars.compile(emailTemplateSource)
     const htmlToSend = template({ token: encodeURIComponent(token) })
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: "smtp.gmail.com",
+        port: 465,
+        secure: true,
         auth: {
             user: process.env.MAIL_USER,
             pass: process.env.MAIL_PASS
-        }
+        },
+        connectionTimeout: 10000, 
+        greetingTimeout: 10000,
+        socketTimeout: 10000
     })
 
     const mailConfigurations = {
-        from: process.env.MAIL_USER,
+        from: `LabelLens <${process.env.MAIL_USER}>`,
         to: email,
         subject: "Verify your email",
         html: htmlToSend
     }
-
-    transporter.sendMail(mailConfigurations, function (error, info) {
-        if (error) {
-            throw new Error(error);
-        }
-        console.log("Email Sent Successfully: " + info.response);
-    })
+    return new Promise((resolve, reject) => {
+        transporter.sendMail(mailConfigurations, function (error, info) {
+            if (error) {
+                console.error("Email Error:", error);
+                reject(error);
+            } else {
+                console.log("Email Sent Successfully: " + info.response);
+                resolve(info);
+            }
+        });
+    });
 }
