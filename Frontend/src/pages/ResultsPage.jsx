@@ -375,7 +375,10 @@ const ResultsPage = () => {
   // Real data setup
   const productName = result.productName || "Scanned Product";
   const productImage = result.image || null;
-  const ingredients = result.ingredients || result.analysisSummary || "Ingredients not available.";
+  
+  // UPDATED: Prioritize the 'cleanedIngredients' from Gemini, fallback to raw OFF text
+  const ingredients = result.cleanedIngredients || result.ingredients || result.analysisSummary || "Ingredients not available.";
+  
   const flaggedIngredients = result.flaggedIngredients || [];
 
   const isSafe = (result.verdict || "").toLowerCase() === "safe";

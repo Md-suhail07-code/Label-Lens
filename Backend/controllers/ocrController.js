@@ -96,12 +96,21 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
         - Consider allergies and health condition while assigning risk.
         - If any ingredient conflicts with allergies, increase risk.
 
+        CRITICAL TASK (TEXT CLEANING):
+        The input text may contain OCR errors, symbols like '_', '^', '*', or formatting issues. 
+        You MUST output a "cleanedIngredients" field where you:
+        1. Remove all non-standard symbols (_, ^, *, etc).
+        2. Fix capitalization (Title Case).
+        3. Fix spacing errors.
+        4. Keep the ingredient list accurate to the product.
+
         Return ONLY a valid JSON object.
         NO markdown. NO explanations outside JSON.
 
         JSON Schema:
         {
           "productName": "Estimated product name",
+          "cleanedIngredients": "The fully sanitized, readable ingredient text",
           "riskScore": 0-100,
           "verdict": "Safe" | "Moderate" | "Risky" | "Hazardous",
           "analysisSummary": "One short sentence summary",
