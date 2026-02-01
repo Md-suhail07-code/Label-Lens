@@ -111,8 +111,8 @@ async function analyzeWithGemini(productName, ingredientsText, healthCondition, 
             }
           ],
           "alternatives": [
-            "Alternative Product 1 Name",
-            "Alternative Product 2 Name"
+            "Specific REAL BRAND NAME available in India (e.g. 'Too Yumm Veggie Stix', 'Epigamia Greek Yogurt'). Do NOT use generic names like 'Baked Chips'. It must be a specific product found in Indian grocery stores.",
+            "Another specific REAL BRAND NAME available in India."
           ]
         }
     `;

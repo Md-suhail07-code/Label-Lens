@@ -311,6 +311,7 @@ const ResultsPage = () => {
   }, [result]);
 
   const fetchAlternativesImages = async (altObjects) => {
+    // If we already have images, stop
     if (altObjects[0]?.image) {
       setAlternatives(altObjects);
       setLoadingAlts(false);
@@ -319,28 +320,47 @@ const ResultsPage = () => {
 
     const enrichedAlts = await Promise.all(
       altObjects.map(async (alt) => {
+        const searchTerm = alt.productName || alt.name || alt;
+        let imageUrl = null;
+        let brand = "Generic";
+        let nutriscore = null;
+
+        // 1. Try OpenFoodFacts First (Best Quality)
         try {
-          const searchTerm = alt.productName || alt.name || alt;
           const res = await axios.get(`https://world.openfoodfacts.org/cgi/search.pl`, {
             params: {
               search_terms: searchTerm,
               search_simple: 1,
               action: 'process',
               json: 1,
-              fields: 'product_name,image_front_url,image_url,brands,nutriscore_grade'
+              fields: 'product_name,image_front_url,image_url,brands,nutriscore_grade',
+              page_size: 1
             }
           });
 
           const product = res.data.products?.[0];
-          return {
-            name: searchTerm,
-            image: product ? (product.image_front_url || product.image_url) : null,
-            brand: product ? product.brands : "Generic",
-            nutriscore: product ? product.nutriscore_grade?.toUpperCase() : null
-          };
+          if (product) {
+            imageUrl = product.image_front_url || product.image_url;
+            brand = product.brands || "Generic";
+            nutriscore = product.nutriscore_grade?.toUpperCase();
+          }
         } catch (e) {
-          return { name: alt.productName || alt, image: null, brand: "Generic", nutriscore: null };
+          console.log("OFF Search failed, trying fallback...");
         }
+
+        // 2. Fallback: Bing Image Hack (If OFF failed)
+        // This is a "Hackathon Special" URL that works without an API key
+        if (!imageUrl) {
+          imageUrl = `https://tse2.mm.bing.net/th?q=${encodeURIComponent(searchTerm + " indian food product packaging")}&w=200&h=200&c=7&rs=1&p=0`;
+          brand = "Best Match"; // Fallback brand name
+        }
+
+        return {
+          name: searchTerm,
+          image: imageUrl,
+          brand: brand,
+          nutriscore: nutriscore
+        };
       })
     );
     
