@@ -8,7 +8,7 @@ dotenv.config();
 // Initialize Gemini AI
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 // Using gemini-1.5-flash for speed
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
 const OFF_HEADERS = {
   "User-Agent": "LabelLens/1.0 (Educational Project)",
