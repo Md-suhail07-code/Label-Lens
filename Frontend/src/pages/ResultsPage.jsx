@@ -129,7 +129,7 @@ function ProductHeader({ status, productName, productImage, riskScore, onBack, o
                  </div>
                )}
              </div>
-             <span className="bg-gray-900 text-white text-[10px] font-bold px-3 py-1.5 rounded-full shadow-lg text-center leading-tight line-clamp-1 max-w-full">
+             <span className="bg-gray-900 text-white text-[10px] font-bold px-3 py-2 rounded-xl shadow-lg text-center leading-tight max-w-full whitespace-normal">
                {productName || "Unknown Product"}
              </span>
           </div>
@@ -241,11 +241,11 @@ function BetterAlternatives({ alternatives, loading }) {
         <h2 className="text-lg font-bold text-gray-900">Healthy Swaps</h2>
       </div>
       
-      <div className="grid grid-cols-3 gap-3 px-6">
+      <div className="grid grid-cols-2 gap-4 px-6">
         {alternatives.map((alt, index) => (
           <div 
             key={index} 
-            className="bg-white rounded-[16px] border border-gray-100 p-2 flex flex-col shadow-sm hover:shadow-md transition-shadow"
+            className="bg-white rounded-[16px] border border-gray-100 p-3 flex flex-col shadow-sm hover:shadow-md transition-shadow"
           >
             <div className="relative aspect-square mb-2 rounded-xl overflow-hidden bg-gray-50 border border-gray-50">
                {alt.image ? (
@@ -265,8 +265,8 @@ function BetterAlternatives({ alternatives, loading }) {
                  </div>
                )}
             </div>
-            <p className="font-bold text-gray-900 text-[10px] mb-1 truncate leading-tight">{alt.name}</p>
-            <p className="text-[9px] text-gray-400 truncate mb-2">{alt.brand}</p>
+            <p className="font-bold text-gray-900 text-xs mb-1 leading-snug whitespace-normal">{alt.name}</p>
+            <p className="text-[10px] text-gray-400 truncate mb-2">{alt.brand}</p>
             
             <button className="w-full py-1.5 rounded-lg bg-gray-900 text-white text-[9px] font-bold mt-auto transition-transform active:scale-95 cursor-pointer">
               View
