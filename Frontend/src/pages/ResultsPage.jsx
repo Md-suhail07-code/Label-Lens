@@ -397,8 +397,8 @@ const ResultsPage = () => {
           onShare={handleShare}
         />
 
-           {/* Content Container: enough top margin so ingredients card clears the product card */}
-           <div className="px-6 mt-6 relative z-20 flex flex-col gap-3">
+           {/* Content Container: extra top margin so product card and ingredients card are well spaced */}
+           <div className="px-6 mt-12 relative z-20 flex flex-col gap-3">
              
              {/* Ingredients Card */}
              <div className="w-full bg-white border border-gray-100 rounded-[20px] p-5 shadow-sm">
